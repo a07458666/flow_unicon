@@ -18,6 +18,11 @@ from Contrastive_loss import *
 import collections.abc
 from collections.abc import MutableMapping
 
+try:
+    import wandb
+except ImportError:
+    wandb = None
+    logger.info("Install Weights & Biases for experiment logging via 'pip install wandb' (recommended)")
 
 ## For plotting the logs
 # import wandb
@@ -72,6 +77,13 @@ test_loss_log = open(model_save_loc +'/test_loss.txt','w')
 train_acc = open(model_save_loc +'/train_acc.txt','w')
 train_loss = open(model_save_loc +'/train_loss.txt','w')
 
+## wandb
+if (wandb != None):
+    os.environ["WANDB_WATCH"] = "false"
+    wandb.init(project="FlowUNICON", entity="andy-su", name=folder)
+    wandb.config.update(args)
+    wandb.define_metric("loss", summary="min")
+    wandb.define_metric("acc", summary="max")
 
 # SSL-Training
 def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloader):
@@ -180,6 +192,15 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
         loss.backward()
         optimizer.step()
         
+        ## wandb
+        if (wandb != None):
+            logMsg = {}
+            logMsg["epoch"] = epoch
+            logMsg["loss/loss_x"] = loss_x/(batch_idx+1)
+            logMsg["loss/loss_u"] = loss_u/(batch_idx+1)
+            logMsg["loss/loss_ucl"] = loss_ucl/(batch_idx+1)
+            wandb.log(logMsg)
+
         sys.stdout.write('\r')
         sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Labeled loss: %.2f  Unlabeled loss: %.2f Contrastive Loss:%.4f'
                 %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_x/(batch_idx+1), loss_u/(batch_idx+1),  loss_ucl/(batch_idx+1)))
@@ -188,6 +209,8 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
 
 ## For Standard Training 
 def warmup_standard(epoch,net,optimizer,dataloader):
+
+    loss_ce_t = 0
 
     net.train()
     num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
@@ -206,6 +229,15 @@ def warmup_standard(epoch,net,optimizer,dataloader):
 
         L.backward()  
         optimizer.step()                
+
+        loss_ce_t += loss.item()
+
+        ## wandb
+        if (wandb != None):
+            logMsg = {}
+            logMsg["epoch"] = epoch
+            logMsg["loss/ce"] = loss_ce_t / (batch_idx + 1)
+            wandb.log(logMsg)
 
         sys.stdout.write('\r')
         sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t CE-loss: %.4f'
@@ -236,6 +268,13 @@ def warmup_val(epoch,net,optimizer,dataloader):
     acc = 100.*correct/total
     print("\n| Train Epoch #%d\t Accuracy: %.2f%%\n" %(epoch, acc))  
     
+    ## wandb
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["acc/warmup"] = acc
+        wandb.log(logMsg)
+
     train_loss.write(str(loss_x/(batch_idx+1)))
     train_acc.write(str(acc))
     train_acc.flush()
@@ -267,6 +306,14 @@ def test(epoch,net1,net2):
 
     acc = 100.*correct/total
     print("\n| Test Epoch #%d\t Accuracy: %.2f%%\n" %(epoch,acc))  
+
+    ## wandb
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["acc/test"] = acc
+        wandb.log(logMsg)
+
     test_log.write(str(acc)+'\n')
     test_log.flush()  
     test_loss_log.write(str(loss_x/(batch_idx+1))+'\n')

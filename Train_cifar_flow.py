@@ -1,5 +1,8 @@
 from __future__ import print_function
 import sys
+from syslog import LOG_MAIL
+
+from urllib3 import Retry
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -17,7 +20,7 @@ from Contrastive_loss import *
 
 import collections.abc
 from collections.abc import MutableMapping
-from flowModule.flow import cnf
+from flow_trainer import FlowTrainer
 from flowModule.utils import standard_normal_logprob
 
 try:
@@ -50,7 +53,8 @@ parser.add_argument('--resume', default=False, type=bool, help = 'Resume from th
 parser.add_argument('--num_class', default=10, type=int)
 parser.add_argument('--data_path', default='./data/cifar10', type=str, help='path to dataset')
 parser.add_argument('--dataset', default='cifar10', type=str)
-parser.add_argument('--use_flow', default=True, type=bool)
+parser.add_argument('--flow_modules', default="8-8-8-8", type=str)
+parser.add_argument('--name', default="", type=str)
 args = parser.parse_args()
 
 ## GPU Setup 
@@ -68,7 +72,7 @@ else:
     torchvision.datasets.CIFAR100(args.data_path,train=False, download=True)
 
 ## Checkpoint Location
-folder = args.dataset + '_' + args.noise_mode + '_' + str(args.r) 
+folder = args.dataset + '_' + args.noise_mode + '_' + str(args.r)  + '_flow_' + args.name
 model_save_loc = './checkpoint/' + folder
 if not os.path.exists(model_save_loc):
     os.mkdir(model_save_loc)
@@ -80,11 +84,19 @@ test_loss_log = open(model_save_loc +'/test_loss.txt','w')
 train_acc = open(model_save_loc +'/train_acc.txt','w')
 train_loss = open(model_save_loc +'/train_loss.txt','w')
 
+## wandb
+if (wandb != None):
+    os.environ["WANDB_WATCH"] = "false"
+    wandb.init(project="FlowUNICON", entity="andy-su", name=folder)
+    wandb.config.update(args)
+    wandb.define_metric("loss", summary="min")
+    wandb.define_metric("acc", summary="max")
 
 # SSL-Training
-def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloader):
+def train(epoch, net, net2, flownet, optimizer, labeled_trainloader, unlabeled_trainloader):
     net2.eval() # Freeze one network and train the other
     net.train()
+    flownet.train()
 
     unlabeled_train_iter = iter(unlabeled_trainloader)    
     num_iter = (len(labeled_trainloader.dataset)//args.batch_size)+1
@@ -94,6 +106,7 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
     loss_u = 0
     loss_scl = 0
     loss_ucl = 0
+    loss_nll = 0
 
     for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x) in enumerate(labeled_trainloader):      
         try:
@@ -162,7 +175,7 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
         mixed_input  = l * input_a  + (1 - l) * input_b        
         mixed_target = l * target_a + (1 - l) * target_b
                 
-        _, logits = net(mixed_input)
+        flow_feature, logits = net(mixed_input) # add flow_feature
         logits_x = logits[:batch_size*2]
         logits_u = logits[batch_size*2:]        
         
@@ -175,27 +188,53 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
         pred_mean = torch.softmax(logits, dim=1).mean(0)
         penalty = torch.sum(prior*torch.log(prior/pred_mean))
 
+        ## Flow loss
+        flow_feature = F.normalize(flow_feature, dim=1)
+        flow_mixed_target = mixed_target.unsqueeze(1).cuda()
+        delta_p = torch.zeros(flow_mixed_target.shape[0], flow_mixed_target.shape[1], 1).cuda() 
+        approx21, delta_log_p2 = flownet(flow_mixed_target, flow_feature, delta_p)
+        
+        approx2 = standard_normal_logprob(approx21).view(mixed_target.size()[0], -1).sum(1, keepdim=True)
+        delta_log_p2 = delta_log_p2.view(flow_mixed_target.size()[0], flow_mixed_target.shape[1], 1).sum(1)
+        log_p2 = (approx2 - delta_log_p2)
+        loss_flow_nll = -log_p2.mean()
+
         ## Total Loss
-        loss = Lx + lamb * Lu + args.lambda_c*loss_simCLR + penalty
+        loss = Lx + lamb * Lu + args.lambda_c*loss_simCLR + penalty + loss_flow_nll
 
         ## Accumulate Loss
         loss_x += Lx.item()
         loss_u += Lu.item()
-        # loss_ucl += loss_simCLR.item()
+        loss_ucl += loss_simCLR.item()
+        loss_nll += loss_flow_nll.item()
 
         # Compute gradient and Do SGD step
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         
+
+        ## wandb
+        if (wandb != None):
+            logMsg = {}
+            logMsg["epoch"] = epoch
+            logMsg["loss/loss_nll"] = loss_nll/(batch_idx+1)
+            logMsg["loss/loss_x"] = loss_x/(batch_idx+1)
+            logMsg["loss/loss_u"] = loss_u/(batch_idx+1)
+            logMsg["loss/loss_ucl"] = loss_ucl/(batch_idx+1)
+            wandb.log(logMsg)
+
         sys.stdout.write('\r')
-        sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Labeled loss: %.2f  Unlabeled loss: %.2f Contrastive Loss:%.4f'
-                %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_x/(batch_idx+1), loss_u/(batch_idx+1),  loss_ucl/(batch_idx+1)))
+        sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Labeled loss: %.2f  Unlabeled loss: %.2f Contrastive Loss:%.4f NLL loss: %.2f'
+                %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_x/(batch_idx+1), loss_u/(batch_idx+1),  loss_ucl/(batch_idx+1),  loss_nll/(batch_idx+1)))
         sys.stdout.flush()
 
 
 ## For Standard Training 
-def warmup_standard(epoch,net,optimizer,dataloader):
+def warmup_standard(epoch,net,flownet, optimizer,dataloader):
+
+    loss_nll_t = 0
+    loss_ce_t = 0
 
     net.train()
     num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
@@ -203,8 +242,23 @@ def warmup_standard(epoch,net,optimizer,dataloader):
     for batch_idx, (inputs, labels, path) in enumerate(dataloader):      
         inputs, labels = inputs.cuda(), labels.cuda() 
         optimizer.zero_grad()
-        _, outputs = net(inputs)               
-        loss    = CEloss(outputs, labels)    
+        feature, outputs = net(inputs)               
+        loss_ce    = CEloss(outputs, labels)    
+
+        # == flow ==
+        feature = F.normalize(feature, dim=1)
+        labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
+        flow_labels = labels_one_hot.unsqueeze(1).cuda()
+        
+        delta_p = torch.zeros(flow_labels.shape[0], flow_labels.shape[1], 1).cuda() 
+        approx21, delta_log_p2 = flownet(flow_labels, feature, delta_p)
+        
+        approx2 = standard_normal_logprob(approx21).view(flow_labels.size()[0], -1).sum(1, keepdim=True)
+        delta_log_p2 = delta_log_p2.view(flow_labels.size()[0], flow_labels.shape[1], 1).sum(1)
+        log_p2 = (approx2 - delta_log_p2)
+        loss_nll = -log_p2.mean()
+        # == flow end ===
+        loss = loss_nll + loss_ce
 
         if args.noise_mode=='asym':     # Penalize confident prediction for asymmetric noise
             penalty = conf_penalty(outputs)
@@ -212,12 +266,23 @@ def warmup_standard(epoch,net,optimizer,dataloader):
         else:   
             L = loss
 
+        loss_nll_t += loss_nll.item()
+        loss_ce_t += loss_ce.item()
         L.backward()  
         optimizer.step()                
 
+        ## wandb
+        if (wandb != None):
+            logMsg = {}
+            logMsg["epoch"] = epoch
+            logMsg["loss/nll+ce"] = (loss_nll_t + loss_ce_t) / (batch_idx + 1)
+            logMsg["loss/nll"] = loss_nll_t / (batch_idx + 1)
+            logMsg["loss/ce"] = loss_ce_t / (batch_idx + 1)
+            wandb.log(logMsg)
+
         sys.stdout.write('\r')
-        sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t CE-loss: %.4f'
-                %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss.item()))
+        sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t CE-loss: %.4f NLL-loss: %.4f'
+                %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_ce_t / (batch_idx + 1), loss_nll_t / (batch_idx + 1)))
         sys.stdout.flush()
 
 ## For Training Accuracy
@@ -244,6 +309,13 @@ def warmup_val(epoch,net,optimizer,dataloader):
     acc = 100.*correct/total
     print("\n| Train Epoch #%d\t Accuracy: %.2f%%\n" %(epoch, acc))  
     
+    ## wandb
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["acc/warmup"] = acc
+        wandb.log(logMsg)
+
     train_loss.write(str(loss_x/(batch_idx+1)))
     train_acc.write(str(acc))
     train_acc.flush()
@@ -275,6 +347,14 @@ def test(epoch,net1,net2):
 
     acc = 100.*correct/total
     print("\n| Test Epoch #%d\t Accuracy: %.2f%%\n" %(epoch,acc))  
+    
+    ## wandb
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["acc/test"] = acc
+        wandb.log(logMsg)
+    
     test_log.write(str(acc)+'\n')
     test_log.flush()  
     test_loss_log.write(str(loss_x/(batch_idx+1))+'\n')
@@ -355,6 +435,12 @@ loader = dataloader.cifar_dataloader(args.dataset, r=args.r, noise_mode=args.noi
 print('| Building net')
 net1 = create_model()
 net2 = create_model()
+
+# flow model
+flowTrainer = FlowTrainer(args)
+flowNet1 = flowTrainer.create_model()
+flowNet2 = flowTrainer.create_model()
+
 cudnn.benchmark = True
 
 ## Semi-Supervised Loss
@@ -378,12 +464,17 @@ if args.noise_mode=='asym':
 
 ## Resume from the warmup checkpoint 
 model_name_1 = 'Net1_warmup.pth'
-model_name_2 = 'Net2_warmup.pth'    
+model_name_2 = 'Net2_warmup.pth'
+
+model_name_flow_1 = 'FlowNet1_warmup.pth'
+model_name_flow_2 = 'FlowNet2_warmup.pth'
 
 if args.resume:
     start_epoch = warm_up
     net1.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_1))['net'])
     net2.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_2))['net'])
+    flowNet1.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_1))['net'])
+    flowNet2.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_2))['net'])
 else:
     start_epoch = 0
 
@@ -399,34 +490,61 @@ for epoch in range(start_epoch,args.num_epochs+1):
     if epoch<warm_up:       
         warmup_trainloader = loader.run(0, 'warmup')
 
-        print('Warmup Model')
-        warmup_standard(epoch, net1, optimizer1, warmup_trainloader)   
-
-        print('\nWarmup Model')
-        warmup_standard(epoch, net2, optimizer2, warmup_trainloader) 
+        print('Warmup Model 1')
+        warmup_standard(epoch, net1, flowNet1, optimizer1, warmup_trainloader)   
+        print('\nWarmup Model 2')
+        warmup_standard(epoch, net2, flowNet2, optimizer2, warmup_trainloader) 
     
     else:
         ## Calculate JSD values and Filter Rate
-        prob = Calculate_JSD(net2, net1, num_samples)           
+        print("Calculate JSD net 1")
+        prob = Calculate_JSD(net2, net1, num_samples)
+        print("prob s", prob.size())
         threshold = torch.mean(prob)
         if threshold.item()>args.d_u:
             threshold = threshold - (threshold-torch.min(prob))/arg.tau
-        SR = torch.sum(prob<threshold).item()/num_samples            
+        SR = torch.sum(prob<threshold).item()/num_samples    
 
+        ## Calculate density(flow) values and Filter Rate
+        print("Calculate density net 1")
+        densitys = flowTrainer.Calculate_density(net1, net2, flowNet1, flowNet2, num_samples, eval_loader)
+        print("densitys size", densitys.size())
+        print("densitys ", densitys[:20])
+        threshold = torch.mean(densitys)
+        if threshold.item() > torch.max(densitys) * args.d_u:
+            threshold = threshold - (threshold-torch.min(densitys))/arg.tau
+        SR = torch.sum(densitys<threshold).item()/num_samples    
+        print("SR : ", SR)
+        print("threshold ", threshold)
+        
         print('Train Net1\n')
-        labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
-        train(epoch,net1,net2,optimizer1,labeled_trainloader, unlabeled_trainloader)    # train net1  
+        labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= densitys) # Uniform Selection
+        train(epoch,net1,net2,flowNet1,optimizer1,labeled_trainloader, unlabeled_trainloader)    # train net1  
 
         ## Calculate JSD values and Filter Rate
-        prob = Calculate_JSD(net2, net1, num_samples)           
+        print("Calculate JSD net 2")
+        prob = Calculate_JSD(net2, net1, num_samples)      
+        print("prob s", prob.size())     
         threshold = torch.mean(prob)
         if threshold.item()>args.d_u:
             threshold = threshold - (threshold-torch.min(prob))/arg.tau
-        SR = torch.sum(prob<threshold).item()/num_samples            
+        SR = torch.sum(prob<threshold).item()/num_samples
 
+        ## Calculate density(flow) values and Filter Rate
+        print("Calculate density net 2")
+        densitys = flowTrainer.Calculate_density(net1, net2, flowNet1, flowNet2, num_samples, eval_loader)
+        print("densitys 2 size", densitys.size())
+        print("densitys 2 ", densitys[:20])
+        threshold = torch.mean(densitys)
+        if threshold.item() > torch.max(densitys) * args.d_u:
+            threshold = threshold - (threshold-torch.min(densitys))/arg.tau
+        SR = torch.sum(densitys<threshold).item()/num_samples        
+        print("SR 2: ", SR)
+        print("threshold 2 ", threshold)
+        
         print('\nTrain Net2')
-        labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob)     # Uniform Selection
-        train(epoch, net2,net1,optimizer2,labeled_trainloader, unlabeled_trainloader)       # train net1
+        labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= densitys)     # Uniform Selection
+        train(epoch, net2,net1,flowNet2, optimizer2,labeled_trainloader, unlabeled_trainloader)       # train net2
 
     acc = test(epoch,net1,net2)
     scheduler1.step()
@@ -436,9 +554,13 @@ for epoch in range(start_epoch,args.num_epochs+1):
         if epoch <warm_up:
             model_name_1 = 'Net1_warmup.pth'
             model_name_2 = 'Net2_warmup.pth'
+            model_name_flow_1 = 'FlowNet1_warmup.pth'
+            model_name_flow_2 = 'FlowNet2_warmup.pth'
         else:
             model_name_1 = 'Net1.pth'
-            model_name_2 = 'Net2.pth'            
+            model_name_2 = 'Net2.pth'
+            model_name_flow_1 = 'FlowNet1.pth'
+            model_name_flow_2 = 'FlowNet2.pth'
 
         print("Save the Model-----")
         checkpoint1 = {
@@ -469,7 +591,33 @@ for epoch in range(start_epoch,args.num_epochs+1):
             'epoch': epoch,
         }
 
+        checkpoint_flow1 = {
+            'net': flowNet1.state_dict(),
+            'Model_number': 3,
+            'Noise_Ratio': args.r,
+            'Loss Function': 'log-likelihood',
+            'Optimizer': 'SGD',
+            'Noise_mode': args.noise_mode,
+            'Dataset': 'TinyImageNet',
+            'Batch Size': args.batch_size,
+            'epoch': epoch,
+        }
+
+        checkpoint_flow2 = {
+            'net': flowNet2.state_dict(),
+            'Model_number': 4,
+            'Noise_Ratio': args.r,
+            'Loss Function': 'log-likelihood',
+            'Optimizer': 'SGD',
+            'Noise_mode': args.noise_mode,
+            'Dataset': 'TinyImageNet',
+            'Batch Size': args.batch_size,
+            'epoch': epoch,
+        }
+
         torch.save(checkpoint1, os.path.join(model_save_loc, model_name_1))
         torch.save(checkpoint2, os.path.join(model_save_loc, model_name_2))
+        torch.save(checkpoint_flow1, os.path.join(model_save_loc, model_name_flow_1))
+        torch.save(checkpoint_flow2, os.path.join(model_save_loc, model_name_flow_2))
         best_acc = acc
 
