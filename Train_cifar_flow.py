@@ -380,7 +380,7 @@ def Calculate_JSD(net, flowNet, num_samples):
 
     return JSD
 
-def logDensity(threshold, prob, labeled_trainloader, unlabeled_trainloader):
+def logDensity(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader):
     labeled_idx = labeled_trainloader.dataset.pred_idx
     unlabeled_idx = unlabeled_trainloader.dataset.pred_idx
     labeled_prob = [prob[i] for i in labeled_idx]
@@ -390,6 +390,7 @@ def logDensity(threshold, prob, labeled_trainloader, unlabeled_trainloader):
 
     if (wandb != None):
         logMsg = {}
+        logMsg["epoch"] = epoch
         logMsg["JSD/threshold"] = threshold
         logMsg["JSD/sample_ratio"] = sample_ratio
         logMsg["JSD/labeled_mean"] =  np.mean(labeled_prob)
@@ -424,7 +425,7 @@ def create_model():
 ## Choose Warmup period based on Dataset
 num_samples = 50000
 if args.dataset=='cifar10':
-    warm_up = 0
+    warm_up = 10
 elif args.dataset=='cifar100':
     warm_up = 30
 
@@ -498,7 +499,7 @@ for epoch in range(start_epoch,args.num_epochs+1):
         
         print('Train Net\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
-        logDensity(threshold, prob, labeled_trainloader, unlabeled_trainloader)
+        logDensity(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader)
         train(epoch, net, flowNet,optimizer,labeled_trainloader, unlabeled_trainloader)    # train net1  
 
     acc = test(epoch,net, flowNet)
