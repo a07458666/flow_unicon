@@ -167,7 +167,8 @@ class cifar_dataset(Dataset):
                     pred_idx = pred_idx_noisy   
                                     
                 self.train_data = train_data[pred_idx]
-                self.noise_label = [noise_label[i] for i in pred_idx]                                 
+                self.noise_label = [noise_label[i] for i in pred_idx]
+                self.pred_idx = pred_idx                            
 
     def __getitem__(self, index):
         if self.mode=='labeled':

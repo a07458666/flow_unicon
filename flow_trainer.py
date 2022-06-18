@@ -108,27 +108,18 @@ class FlowTrainer:
         return probs_mean
 
 
-    def testByFlow(self, net1,net2, flownet1, flownet2, test_loader):
-        net1.eval()
-        net2.eval()
-        flownet1.eval()
-        flownet2.eval()
+    def testByFlow(self, net, flownet, test_loader):
+        net.eval()
+        flownet.eval()
         correct = 0
         total = 0
         with torch.no_grad():
             for batch_idx, (inputs, targets) in enumerate(test_loader):
                 inputs, targets = inputs.cuda(), targets.cuda()
-                feature1, _ = net1(inputs)       
-                feature2, _ = net2(inputs)
-                
-                outputs1 = self.predict(flownet1, feature1)
-                outputs2 = self.predict(flownet2, feature2)
-                
-                outputs = outputs1+outputs2
-                _, predicted = torch.max(outputs, 1)            
-                        
+                feature, _ = net(inputs)       
+                outputs = self.predict(flownet, feature)
+                _, predicted = torch.max(outputs, 1)    
                 total += targets.size(0)
                 correct += predicted.eq(targets).cpu().sum().item()                    
         acc = 100.*correct/total
-        print("\n| Test Acc: %.2f%%\n" %(acc)) 
-        return acc  
+        return acc

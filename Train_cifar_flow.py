@@ -1,4 +1,5 @@
 from __future__ import print_function
+import imp
 import sys
 from syslog import LOG_MAIL
 
@@ -22,7 +23,7 @@ import collections.abc
 from collections.abc import MutableMapping
 from flow_trainer import FlowTrainer
 from flowModule.utils import standard_normal_logprob
-
+from tqdm import tqdm
 try:
     import wandb
 except ImportError:
@@ -55,7 +56,6 @@ parser.add_argument('--data_path', default='./data/cifar10', type=str, help='pat
 parser.add_argument('--dataset', default='cifar10', type=str)
 parser.add_argument('--flow_modules', default="8-8-8-8", type=str)
 parser.add_argument('--name', default="", type=str)
-parser.add_argument('--flowPseudo', action='store_true')
 parser.add_argument('--flowRefine', action='store_true')
 parser.add_argument('--oneNet', action='store_true')
 args = parser.parse_args()
@@ -96,8 +96,7 @@ if (wandb != None):
     wandb.define_metric("acc", summary="max")
 
 # SSL-Training
-def train(epoch, net, net2, flownet, optimizer, labeled_trainloader, unlabeled_trainloader):
-    net2.eval() # Freeze one network and train the other
+def train(epoch, net, flownet, optimizer, labeled_trainloader, unlabeled_trainloader):
     net.train()
     flownet.train()
 
@@ -105,13 +104,8 @@ def train(epoch, net, net2, flownet, optimizer, labeled_trainloader, unlabeled_t
     num_iter = (len(labeled_trainloader.dataset)//args.batch_size)+1
 
     ## Loss statistics
-    loss_x = 0
-    loss_u = 0
-    loss_scl = 0
     loss_ucl = 0
     loss_nll = 0
-
-    kld = 0
 
     for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x) in enumerate(labeled_trainloader):      
         try:
@@ -131,37 +125,28 @@ def train(epoch, net, net2, flownet, optimizer, labeled_trainloader, unlabeled_t
         
         with torch.no_grad():
             # Label co-guessing of unlabeled samples
-            features_u11, outputs_u11 = net(inputs_u)
-            features_u12, outputs_u12 = net(inputs_u2)
-            _, outputs_u21 = net2(inputs_u)
-            _, outputs_u22 = net2(inputs_u2)            
+            features_u11, _ = net(inputs_u)
+            features_u12, _ = net(inputs_u2)
+                  
             
             ## Pseudo-label
-            if (args.flowPseudo):
-                flow_outputs_u11 = flowTrainer.predict(flownet, features_u11)
-                flow_outputs_u12 = flowTrainer.predict(flownet, features_u12)
-                
-                pu_f = (torch.softmax(flow_outputs_u11, dim=1) + torch.softmax(flow_outputs_u12, dim=1)) / 2
-                pu = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1) + torch.softmax(outputs_u21, dim=1) + torch.softmax(outputs_u22, dim=1)) / 4       
-                kld += KLloss(pu_f, pu).item()
-            else:
-                pu = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1) + torch.softmax(outputs_u21, dim=1) + torch.softmax(outputs_u22, dim=1)) / 4       
+            flow_outputs_u11 = flowTrainer.predict(flownet, features_u11)
+            flow_outputs_u12 = flowTrainer.predict(flownet, features_u12)
 
+            pu = (flow_outputs_u11 + flow_outputs_u12) / 2
             ptu = pu**(1/args.T)            ## Temparature Sharpening
             
             targets_u = ptu / ptu.sum(dim=1, keepdim=True)
             targets_u = targets_u.detach()                  
 
             ## Label refinement
-            _, outputs_x  = net(inputs_x)
-            _, outputs_x2 = net(inputs_x2)            
+            features_x, _  = net(inputs_x)
+            features_x2, _ = net(inputs_x2)            
             
-            if (args.flowRefine):
-                px = (torch.softmax(outputs_x, dim=1) + torch.softmax(outputs_x2, dim=1)) / 2    
-                px = w_x*labels_x + (1-w_x)*px
-            else:
-                px = (torch.softmax(outputs_x, dim=1) + torch.softmax(outputs_x2, dim=1)) / 2
-                px = w_x*labels_x + (1-w_x)*px      
+            flow_outputs_x = flowTrainer.predict(flownet, features_x)
+            flow_outputs_x2 = flowTrainer.predict(flownet, features_x2)
+            px = (flow_outputs_x + flow_outputs_x2) / 2    
+            px = w_x*labels_x + (1-w_x)*px
 
             ptx = px**(1/args.T)    ## Temparature sharpening 
                         
@@ -197,7 +182,7 @@ def train(epoch, net, net2, flownet, optimizer, labeled_trainloader, unlabeled_t
         logits_u = logits[batch_size*2:]        
         
         ## Combined Loss
-        Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
+        # Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
         
         ## Regularization
         prior = torch.ones(args.num_class)/args.num_class
@@ -217,11 +202,12 @@ def train(epoch, net, net2, flownet, optimizer, labeled_trainloader, unlabeled_t
         loss_flow_nll = -log_p2.mean()
 
         ## Total Loss
-        loss = Lx + lamb * Lu + args.lambda_c*loss_simCLR + penalty + loss_flow_nll
+        # loss = Lx + lamb * Lu + args.lambda_c*loss_simCLR + penalty + loss_flow_nll
+        loss = args.lambda_c*loss_simCLR + penalty + loss_flow_nll
 
         ## Accumulate Loss
-        loss_x += Lx.item()
-        loss_u += Lu.item()
+        # loss_x += Lx.item()
+        # loss_u += Lu.item()
         loss_ucl += loss_simCLR.item()
         loss_nll += loss_flow_nll.item()
 
@@ -236,15 +222,14 @@ def train(epoch, net, net2, flownet, optimizer, labeled_trainloader, unlabeled_t
             logMsg = {}
             logMsg["epoch"] = epoch
             logMsg["loss/loss_nll"] = loss_nll/(batch_idx+1)
-            logMsg["loss/loss_x"] = loss_x/(batch_idx+1)
-            logMsg["loss/loss_u"] = loss_u/(batch_idx+1)
+            # logMsg["loss/loss_x"] = loss_x/(batch_idx+1)
+            # logMsg["loss/loss_u"] = loss_u/(batch_idx+1)
             logMsg["loss/loss_ucl"] = loss_ucl/(batch_idx+1)
-            logMsg["kld"] = kld / (batch_idx+1)
             wandb.log(logMsg)
 
         sys.stdout.write('\r')
-        sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Labeled loss: %.2f  Unlabeled loss: %.2f Contrastive Loss:%.4f NLL loss: %.2f'
-                %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_x/(batch_idx+1), loss_u/(batch_idx+1),  loss_ucl/(batch_idx+1),  loss_nll/(batch_idx+1)))
+        sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Contrastive Loss:%.4f NLL loss: %.2f'
+                %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_ucl/(batch_idx+1),  loss_nll/(batch_idx+1)))
         sys.stdout.flush()
 
 
@@ -342,31 +327,8 @@ def warmup_val(epoch,net,optimizer,dataloader):
     return acc
 
 ## Test Accuracy
-def test(epoch,net1,net2):
-    net1.eval()
-    net2.eval()
-
-    num_samples = 1000
-    correct = 0
-    total = 0
-    loss_x = 0
-    with torch.no_grad():
-        for batch_idx, (inputs, targets) in enumerate(test_loader):
-            inputs, targets = inputs.cuda(), targets.cuda()
-            _, outputs1 = net1(inputs)
-            _, outputs2 = net2(inputs)
-            if (args.oneNet):      
-                outputs = outputs1
-            else:
-                outputs = outputs1+outputs2
-            _, predicted = torch.max(outputs, 1)            
-            loss = CEloss(outputs, targets)  
-            loss_x += loss.item()
-
-            total += targets.size(0)
-            correct += predicted.eq(targets).cpu().sum().item()  
-
-    acc = 100.*correct/total
+def test(epoch,net,flowNet):
+    acc = flowTrainer.testByFlow(net, flowNet, test_loader)
     print("\n| Test Epoch #%d\t Accuracy: %.2f%%\n" %(epoch,acc))  
     
     ## wandb
@@ -378,8 +340,8 @@ def test(epoch,net1,net2):
     
     test_log.write(str(acc)+'\n')
     test_log.flush()  
-    test_loss_log.write(str(loss_x/(batch_idx+1))+'\n')
-    test_loss_log.flush()
+    # test_loss_log.write(str(loss_x/(batch_idx+1))+'\n')
+    # test_loss_log.flush()
     return acc
 
 
@@ -397,26 +359,44 @@ class Jensen_Shannon(nn.Module):
         return 0.5*kl_divergence(p, m) + 0.5*kl_divergence(q, m)
 
 ## Calculate JSD
-def Calculate_JSD(model1, model2, num_samples):  
+def Calculate_JSD(net, flowNet, num_samples):  
     JS_dist = Jensen_Shannon()
     JSD   = torch.zeros(num_samples)    
 
-    for batch_idx, (inputs, targets, index) in enumerate(eval_loader):
+    for batch_idx, (inputs, targets, index) in tqdm(enumerate(eval_loader)):
         inputs, targets = inputs.cuda(), targets.cuda()
         batch_size = inputs.size()[0]
 
         ## Get outputs of both network
         with torch.no_grad():
-            out1 = torch.nn.Softmax(dim=1).cuda()(model1(inputs)[1])     
-            out2 = torch.nn.Softmax(dim=1).cuda()(model2(inputs)[1])
-        ## Get the Prediction
-        out = (out1 + out2)/2     
+            feature = net(inputs)[0]
+            out = flowTrainer.predict(flowNet, feature)
 
         ## Divergence clculator to record the diff. between ground truth and output prob. dist.  
         dist = JS_dist(out,  F.one_hot(targets, num_classes = args.num_class))
         JSD[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = dist
 
+
+
     return JSD
+
+def logDensity(threshold, prob, labeled_trainloader, unlabeled_trainloader):
+    labeled_idx = labeled_trainloader.dataset.pred_idx
+    unlabeled_idx = unlabeled_trainloader.dataset.pred_idx
+    labeled_prob = [prob[i] for i in labeled_idx]
+    unlabeled_prob = [prob[i] for i in unlabeled_idx]
+    sample_ratio = torch.sum(prob<threshold).item()/num_samples
+
+
+    if (wandb != None):
+        logMsg = {}
+        logMsg["JSD/threshold"] = threshold
+        logMsg["JSD/sample_ratio"] = sample_ratio
+        logMsg["JSD/labeled_mean"] =  np.mean(labeled_prob)
+        logMsg["JSD/labeled_var"] = np.var(labeled_prob)
+        logMsg["JSD/unlabeled_mean"] = np.mean(unlabeled_prob)
+        logMsg["JSD/unlabeled_var"] = np.var(unlabeled_prob)
+        wandb.log(logMsg)
 
 
 ## Unsupervised Loss coefficient adjustment 
@@ -444,7 +424,7 @@ def create_model():
 ## Choose Warmup period based on Dataset
 num_samples = 50000
 if args.dataset=='cifar10':
-    warm_up = 10
+    warm_up = 0
 elif args.dataset=='cifar100':
     warm_up = 30
 
@@ -453,13 +433,11 @@ loader = dataloader.cifar_dataloader(args.dataset, r=args.r, noise_mode=args.noi
     root_dir=model_save_loc,log=stats_log, noise_file='%s/clean_%.4f_%s.npz'%(args.data_path,args.r, args.noise_mode))
 
 print('| Building net')
-net1 = create_model()
-net2 = create_model()
+net = create_model()
 
 # flow model
 flowTrainer = FlowTrainer(args)
-flowNet1 = flowTrainer.create_model()
-flowNet2 = flowTrainer.create_model()
+flowNet = flowTrainer.create_model()
 
 cudnn.benchmark = True
 
@@ -467,11 +445,9 @@ cudnn.benchmark = True
 criterion  = SemiLoss()
 
 ## Optimizer and Scheduler
-optimizer1 = optim.SGD(net1.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4) 
-optimizer2 = optim.SGD(net2.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4) 
 
-scheduler1 = optim.lr_scheduler.CosineAnnealingLR(optimizer1, 280, 2e-4)
-scheduler2 = optim.lr_scheduler.CosineAnnealingLR(optimizer2, 280, 2e-4)
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, 280, 2e-4)
 
 ## Loss Functions
 CE       = nn.CrossEntropyLoss(reduction='none')
@@ -484,18 +460,14 @@ if args.noise_mode=='asym':
     conf_penalty = NegEntropy()
 
 ## Resume from the warmup checkpoint 
-model_name_1 = 'Net1_warmup.pth'
-model_name_2 = 'Net2_warmup.pth'
+model_name = 'Net_warmup.pth'
 
-model_name_flow_1 = 'FlowNet1_warmup.pth'
-model_name_flow_2 = 'FlowNet2_warmup.pth'
+model_name_flow = 'FlowNet_warmup.pth'
 
 if args.resume:
     start_epoch = warm_up
-    net1.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_1))['net'])
-    net2.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_2))['net'])
-    flowNet1.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_1))['net'])
-    flowNet2.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_2))['net'])
+    net.load_state_dict(torch.load(os.path.join(model_save_loc, model_name))['net'])
+    flowNet.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow))['net'])
 else:
     start_epoch = 0
 
@@ -512,91 +484,37 @@ for epoch in range(start_epoch,args.num_epochs+1):
         warmup_trainloader = loader.run(0, 'warmup')
 
         print('Warmup Model 1')
-        warmup_standard(epoch, net1, flowNet1, optimizer1, warmup_trainloader)   
-        print('\nWarmup Model 2')
-        warmup_standard(epoch, net2, flowNet2, optimizer2, warmup_trainloader) 
+        warmup_standard(epoch, net, flowNet, optimizer, warmup_trainloader)   
     
     else:
-        if (args.metric == "JSD"):
-            ## Calculate JSD values and Filter Rate
-            print("Calculate JSD net 1")
-            prob = Calculate_JSD(net2, net1, num_samples)
-            print("prob s", prob.size())
-            threshold = torch.mean(prob)
-            if threshold.item()>args.d_u:
-                threshold = threshold - (threshold-torch.min(prob))/args.tau
-            selectMetric = prob
-            SR = torch.sum(prob<threshold).item()/num_samples    
-
-        elif (args.metric == "density"):
-            ## Calculate density(flow) values and Filter Rate
-            print("Calculate density net 1")
-            densitys = flowTrainer.Calculate_density(net1, net2, flowNet1, flowNet2, num_samples, eval_loader)
-            print("densitys size", densitys.size())
-            print("densitys ", densitys[:20])
-            threshold = torch.mean(densitys)
-            if threshold.item() > torch.max(densitys) * args.d_u:
-                threshold = threshold - (threshold-torch.min(densitys))/args.tau
-            SR = torch.sum(densitys<threshold).item()/num_samples    
-            selectMetric = densitys
-            print("SR : ", SR)
-            print("threshold ", threshold)
+        ## Calculate JSD values and Filter Rate
+        print("Calculate JSD")
+        prob = Calculate_JSD(net, flowNet, num_samples)
+        print("prob s", prob.size())
+        threshold = torch.mean(prob)
+        if threshold.item()>args.d_u:
+            threshold = threshold - (threshold-torch.min(prob))/args.tau
+        SR = torch.sum(prob<threshold).item()/num_samples    
         
-        print('Train Net1\n')
-        labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= selectMetric) # Uniform Selection
-        train(epoch,net1,net2,flowNet1,optimizer1,labeled_trainloader, unlabeled_trainloader)    # train net1  
-        
-         # only train net1
-        if (args.oneNet):
-            continue
+        print('Train Net\n')
+        labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
+        logDensity(threshold, prob, labeled_trainloader, unlabeled_trainloader)
+        train(epoch, net, flowNet,optimizer,labeled_trainloader, unlabeled_trainloader)    # train net1  
 
-        if (args.metric == "density"):
-            ## Calculate JSD values and Filter Rate
-            print("Calculate JSD net 2")
-            prob = Calculate_JSD(net2, net1, num_samples)      
-            print("prob s", prob.size())     
-            threshold = torch.mean(prob)
-            if threshold.item()>args.d_u:
-                threshold = threshold - (threshold-torch.min(prob))/args.tau
-            selectMetric = prob
-            SR = torch.sum(prob<threshold).item()/num_samples
-        elif (args.metric == "density"):
-            ## Calculate density(flow) values and Filter Rate
-            print("Calculate density net 2")
-            densitys = flowTrainer.Calculate_density(net1, net2, flowNet1, flowNet2, num_samples, eval_loader)
-            print("densitys 2 size", densitys.size())
-            print("densitys 2 ", densitys[:20])
-            threshold = torch.mean(densitys)
-            if threshold.item() > torch.max(densitys) * args.d_u:
-                threshold = threshold - (threshold-torch.min(densitys))/args.tau
-            SR = torch.sum(densitys<threshold).item()/num_samples  
-            selectMetric = densitys      
-            print("SR 2: ", SR)
-            print("threshold 2 ", threshold)
-        
-        print('\nTrain Net2')
-        labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= selectMetric)     # Uniform Selection
-        train(epoch, net2,net1,flowNet2, optimizer2,labeled_trainloader, unlabeled_trainloader)       # train net2
-
-    acc = test(epoch,net1,net2)
-    scheduler1.step()
-    scheduler2.step()
+    acc = test(epoch,net, flowNet)
+    scheduler.step()
 
     if acc > best_acc:
         if epoch <warm_up:
-            model_name_1 = 'Net1_warmup.pth'
-            model_name_2 = 'Net2_warmup.pth'
-            model_name_flow_1 = 'FlowNet1_warmup.pth'
-            model_name_flow_2 = 'FlowNet2_warmup.pth'
+            model_name = 'Net_warmup.pth'
+            model_name_flow = 'FlowNet_warmup.pth'
         else:
-            model_name_1 = 'Net1.pth'
-            model_name_2 = 'Net2.pth'
-            model_name_flow_1 = 'FlowNet1.pth'
-            model_name_flow_2 = 'FlowNet2.pth'
+            model_name = 'Net.pth'
+            model_name_flow = 'FlowNet.pth'
 
         print("Save the Model-----")
-        checkpoint1 = {
-            'net': net1.state_dict(),
+        checkpoint = {
+            'net': net.state_dict(),
             'Model_number': 1,
             'Noise_Ratio': args.r,
             'Loss Function': 'CrossEntropyLoss',
@@ -609,22 +527,8 @@ for epoch in range(start_epoch,args.num_epochs+1):
             'epoch': epoch,
         }
 
-        checkpoint2 = {
-            'net': net2.state_dict(),
-            'Model_number': 2,
-            'Noise_Ratio': args.r,
-            'Loss Function': 'CrossEntropyLoss',
-            'Optimizer': 'SGD',
-            'Noise_mode': args.noise_mode,
-            'Accuracy': acc,
-            'Pytorch version': '1.4.0',
-            'Dataset': 'TinyImageNet',
-            'Batch Size': args.batch_size,
-            'epoch': epoch,
-        }
-
-        checkpoint_flow1 = {
-            'net': flowNet1.state_dict(),
+        checkpoint_flow = {
+            'net': flowNet.state_dict(),
             'Model_number': 3,
             'Noise_Ratio': args.r,
             'Loss Function': 'log-likelihood',
@@ -635,21 +539,7 @@ for epoch in range(start_epoch,args.num_epochs+1):
             'epoch': epoch,
         }
 
-        checkpoint_flow2 = {
-            'net': flowNet2.state_dict(),
-            'Model_number': 4,
-            'Noise_Ratio': args.r,
-            'Loss Function': 'log-likelihood',
-            'Optimizer': 'SGD',
-            'Noise_mode': args.noise_mode,
-            'Dataset': 'TinyImageNet',
-            'Batch Size': args.batch_size,
-            'epoch': epoch,
-        }
-
-        torch.save(checkpoint1, os.path.join(model_save_loc, model_name_1))
-        torch.save(checkpoint2, os.path.join(model_save_loc, model_name_2))
-        torch.save(checkpoint_flow1, os.path.join(model_save_loc, model_name_flow_1))
-        torch.save(checkpoint_flow2, os.path.join(model_save_loc, model_name_flow_2))
+        torch.save(checkpoint, os.path.join(model_save_loc, model_name))
+        torch.save(checkpoint_flow, os.path.join(model_save_loc, model_name_flow))
         best_acc = acc
 
