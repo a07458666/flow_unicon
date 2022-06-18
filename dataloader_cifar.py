@@ -36,7 +36,7 @@ class cifar_dataset(Dataset):
         root_dir_save = root_dir
 
         if dataset == 'cifar10':
-            root_dir = './data/cifar10/'            
+            root_dir = './data/cifar10/cifar-10-batches-py'            
             num_class =10         
         else:
             root_dir = './data/cifar100/'
