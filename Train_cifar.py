@@ -449,7 +449,7 @@ for epoch in range(start_epoch,args.num_epochs+1):
         prob = Calculate_JSD(net2, net1, num_samples)           
         threshold = torch.mean(prob)
         if threshold.item()>args.d_u:
-            threshold = threshold - (threshold-torch.min(prob))/arg.tau
+            threshold = threshold - (threshold-torch.min(prob))/args.tau
         SR = torch.sum(prob<threshold).item()/num_samples            
 
         print('Train Net1\n')
@@ -460,7 +460,7 @@ for epoch in range(start_epoch,args.num_epochs+1):
         prob = Calculate_JSD(net2, net1, num_samples)           
         threshold = torch.mean(prob)
         if threshold.item()>args.d_u:
-            threshold = threshold - (threshold-torch.min(prob))/arg.tau
+            threshold = threshold - (threshold-torch.min(prob))/args.tau
         SR = torch.sum(prob<threshold).item()/num_samples            
 
         print('\nTrain Net2')
