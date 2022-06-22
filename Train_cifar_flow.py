@@ -104,6 +104,8 @@ def train(epoch, net, flownet, optimizer, labeled_trainloader, unlabeled_trainlo
     num_iter = (len(labeled_trainloader.dataset)//args.batch_size)+1
 
     ## Loss statistics
+    loss_x = 0
+    loss_u = 0
     loss_ucl = 0
     loss_nll = 0
 
@@ -182,7 +184,8 @@ def train(epoch, net, flownet, optimizer, labeled_trainloader, unlabeled_trainlo
         logits_u = logits[batch_size*2:]        
         
         ## Combined Loss
-        # Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
+        if (args.oneNet):
+            Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
         
         ## Regularization
         prior = torch.ones(args.num_class)/args.num_class
@@ -199,15 +202,21 @@ def train(epoch, net, flownet, optimizer, labeled_trainloader, unlabeled_trainlo
         approx2 = standard_normal_logprob(approx21).view(mixed_target.size()[0], -1).sum(1, keepdim=True)
         delta_log_p2 = delta_log_p2.view(flow_mixed_target.size()[0], flow_mixed_target.shape[1], 1).sum(1)
         log_p2 = (approx2 - delta_log_p2)
-        loss_flow_nll = -log_p2.mean()
 
+        lamb = linear_rampup(epoch, warm_up)
+
+        loss_flow_nll_x = -log_p2[:batch_size*2].mean()
+        loss_flow_nll_u = -log_p2[:batch_size*2].mean()
+        loss_flow_nll = loss_flow_nll_x + lamb * loss_flow_nll_u 
         ## Total Loss
-        # loss = Lx + lamb * Lu + args.lambda_c*loss_simCLR + penalty + loss_flow_nll
-        loss = args.lambda_c*loss_simCLR + penalty + loss_flow_nll
+        if (args.oneNet):
+            loss = Lx + lamb * Lu + args.lambda_c*loss_simCLR + penalty + loss_flow_nll
+        else:
+            loss = args.lambda_c*loss_simCLR + penalty + loss_flow_nll
 
         ## Accumulate Loss
-        # loss_x += Lx.item()
-        # loss_u += Lu.item()
+        loss_x += loss_flow_nll_x.item()
+        loss_u += loss_flow_nll_u.item()
         loss_ucl += loss_simCLR.item()
         loss_nll += loss_flow_nll.item()
 
@@ -222,8 +231,8 @@ def train(epoch, net, flownet, optimizer, labeled_trainloader, unlabeled_trainlo
             logMsg = {}
             logMsg["epoch"] = epoch
             logMsg["loss/loss_nll"] = loss_nll/(batch_idx+1)
-            # logMsg["loss/loss_x"] = loss_x/(batch_idx+1)
-            # logMsg["loss/loss_u"] = loss_u/(batch_idx+1)
+            logMsg["loss/loss_x"] = loss_x/(batch_idx+1)
+            logMsg["loss/loss_u"] = loss_u/(batch_idx+1)
             logMsg["loss/loss_ucl"] = loss_ucl/(batch_idx+1)
             wandb.log(logMsg)
 
@@ -376,11 +385,28 @@ def Calculate_JSD(net, flowNet, num_samples):
         dist = JS_dist(out,  F.one_hot(targets, num_classes = args.num_class))
         JSD[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = dist
 
+    return JSD
 
+## Calculate JSD
+def Calculate_JSD_onenet(model, num_samples):  
+    JS_dist = Jensen_Shannon()
+    JSD   = torch.zeros(num_samples)    
+
+    for batch_idx, (inputs, targets, index) in enumerate(eval_loader):
+        inputs, targets = inputs.cuda(), targets.cuda()
+        batch_size = inputs.size()[0]
+
+        ## Get outputs of both network
+        with torch.no_grad():
+            out = torch.nn.Softmax(dim=1).cuda()(model(inputs)[1])     
+
+        ## Divergence clculator to record the diff. between ground truth and output prob. dist.  
+        dist = JS_dist(out,  F.one_hot(targets, num_classes = args.num_class))
+        JSD[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = dist
 
     return JSD
 
-def logDensity(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader):
+def logJSD(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader):
     labeled_idx = labeled_trainloader.dataset.pred_idx
     unlabeled_idx = unlabeled_trainloader.dataset.pred_idx
     labeled_prob = [prob[i] for i in labeled_idx]
@@ -490,7 +516,11 @@ for epoch in range(start_epoch,args.num_epochs+1):
     else:
         ## Calculate JSD values and Filter Rate
         print("Calculate JSD")
-        prob = Calculate_JSD(net, flowNet, num_samples)
+        
+        if (args.oneNet):
+            prob = Calculate_JSD_onenet(net, num_samples)
+        else:
+            prob = Calculate_JSD(net, flowNet, num_samples)
         print("prob s", prob.size())
         threshold = torch.mean(prob)
         if threshold.item()>args.d_u:
@@ -499,7 +529,7 @@ for epoch in range(start_epoch,args.num_epochs+1):
         
         print('Train Net\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
-        logDensity(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader)
+        logJSD(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader)
         train(epoch, net, flowNet,optimizer,labeled_trainloader, unlabeled_trainloader)    # train net1  
 
     acc = test(epoch,net, flowNet)
