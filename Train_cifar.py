@@ -357,6 +357,24 @@ def Calculate_JSD(model1, model2, num_samples):
 
     return JSD
 
+def logJSD(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader):
+    labeled_idx = labeled_trainloader.dataset.pred_idx
+    unlabeled_idx = unlabeled_trainloader.dataset.pred_idx
+    labeled_prob = [prob[i] for i in labeled_idx]
+    unlabeled_prob = [prob[i] for i in unlabeled_idx]
+    sample_ratio = torch.sum(prob<threshold).item()/num_samples
+
+
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["JSD/threshold"] = threshold
+        logMsg["JSD/sample_ratio"] = sample_ratio
+        logMsg["JSD/labeled_mean"] =  np.mean(labeled_prob)
+        logMsg["JSD/labeled_var"] = np.var(labeled_prob)
+        logMsg["JSD/unlabeled_mean"] = np.mean(unlabeled_prob)
+        logMsg["JSD/unlabeled_var"] = np.var(unlabeled_prob)
+        wandb.log(logMsg)
 
 ## Unsupervised Loss coefficient adjustment 
 def linear_rampup(current, warm_up, rampup_length=16):
@@ -452,8 +470,10 @@ for epoch in range(start_epoch,args.num_epochs+1):
             threshold = threshold - (threshold-torch.min(prob))/args.tau
         SR = torch.sum(prob<threshold).item()/num_samples            
 
+
         print('Train Net1\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
+        logJSD(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader)
         train(epoch,net1,net2,optimizer1,labeled_trainloader, unlabeled_trainloader)    # train net1  
 
         ## Calculate JSD values and Filter Rate
