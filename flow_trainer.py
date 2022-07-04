@@ -100,13 +100,10 @@ class FlowTrainer:
         probs = torch.clamp(approx21, min=0, max=1)
         probsSum = torch.sum(probs, 2).unsqueeze(1).expand(probs.size())
         probs /= probsSum
-        probs = probs.detach().squeeze(1)  
+        probs = probs.detach().squeeze(1)
         probs = probs.view(sample_n, -1, self.args.num_class)
-        probs_all = probs
         probs_mean = torch.mean(probs, dim=0, keepdim=False)
-        
         return probs_mean
-
 
     def testByFlow(self, net, flownet, test_loader):
         net.eval()
@@ -123,3 +120,37 @@ class FlowTrainer:
                 correct += predicted.eq(targets).cpu().sum().item()                    
         acc = 100.*correct/total
         return acc
+
+    def torch_onehot(self, y, Nclass):
+        if y.is_cuda:
+            y = y.type(torch.cuda.LongTensor)
+        else:
+            y = y.type(torch.LongTensor)
+        y_onehot = torch.zeros((y.shape[0], Nclass)).type(y.type())
+        # In your for loop
+        y_onehot.scatter_(1, y.unsqueeze(1), 1)
+        return y_onehot
+
+    ## Pseudo-label
+    def get_pseudo_label(self, flownet, features_u11, features_u12):
+        flow_outputs_u11 = self.predict(flownet, features_u11)
+        flow_outputs_u12 = self.predict(flownet, features_u12)
+
+        pu = (flow_outputs_u11 + flow_outputs_u12) / 2
+
+        if(self.args.predictPolicy == "weight"):
+            # print("pu size()", pu.size())
+            # print("pu", pu[:10])
+            pu_label = torch.distributions.Categorical(pu).sample()
+            # print("pu_label size()", pu_label.size())
+            # print("pu_label : ", pu_label[:10])
+            pu_onehot = self.torch_onehot(pu_label, pu.shape[1]).detach()
+            # print("pu_onehot : ", pu_onehot[:10])
+            # print("pu_onehot size()", pu_onehot.size())
+            return pu_onehot
+
+        ptu = pu**(1/self.args.T)            ## Temparature Sharpening
+
+        targets_u = ptu / ptu.sum(dim=1, keepdim=True)
+        targets_u = targets_u.detach()
+        return targets_u
