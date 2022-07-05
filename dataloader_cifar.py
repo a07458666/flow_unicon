@@ -157,6 +157,7 @@ class cifar_dataset(Dataset):
                     np.savez(save_file, index = pred_idx)
 
                     ## Weights for label refinement
+                    self.origin_prob = torch.clone(probability)
                     probability[probability<0.5] = 0
                     self.probability = [1-probability[i] for i in pred_idx]
 
