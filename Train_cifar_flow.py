@@ -18,6 +18,7 @@ from PreResNet_cifar import *
 import dataloader_cifar as dataloader
 from math import log2
 from Contrastive_loss import *
+import matplotlib.pyplot as plt
 
 import collections.abc
 from collections.abc import MutableMapping
@@ -36,17 +37,19 @@ except ImportError:
 
 ## Arguments to pass 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR Training')
-parser.add_argument('--batch_size', default=64, type=int, help='train batchsize') 
+parser.add_argument('--batch_size', default=256, type=int, help='train batchsize') 
 parser.add_argument('--lr', '--learning_rate', default=0.02, type=float, help='initial learning rate')
+parser.add_argument('--lr_f', '--flow_learning_rate', default=2e-5, type=float, help='initial flow learning rate')
 parser.add_argument('--noise_mode',  default='sym')
 parser.add_argument('--alpha', default=4, type=float, help='parameter for Beta')
 parser.add_argument('--lambda_u', default=1, type=float, help='weight for unsupervised loss')
+parser.add_argument('--lambda_x', default=30, type=float, help='weight for supervised loss')
 parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
 parser.add_argument('--T', default=0.5, type=float, help='sharpening temperature')
 parser.add_argument('--num_epochs', default=350, type=int)
 parser.add_argument('--r', default=0.5, type=float, help='noise ratio')
-parser.add_argument('--d_u',  default=0.7, type=float)
-parser.add_argument('--tau', default=5, type=float, help='filtering coefficient')
+parser.add_argument('--d_u',  default=0.47, type=float)
+parser.add_argument('--tau', default=3.5, type=float, help='filtering coefficient')
 parser.add_argument('--metric', type=str, default = 'JSD', help='Comparison Metric')
 parser.add_argument('--seed', default=123)
 parser.add_argument('--gpuid', default=0, type=int)
@@ -57,7 +60,9 @@ parser.add_argument('--dataset', default='cifar10', type=str)
 parser.add_argument('--flow_modules', default="8-8-8-8", type=str)
 parser.add_argument('--name', default="", type=str)
 parser.add_argument('--flowRefine', action='store_true')
-parser.add_argument('--oneNet', action='store_true')
+parser.add_argument('--ce', action='store_true')
+parser.add_argument('--fix', default='none', choices=['none', 'net', 'flow'], type=str)
+parser.add_argument('--fix_wp', default='none', choices=['none', 'net', 'flow'], type=str)
 parser.add_argument('--predictPolicy', default='mean', choices=['mean', 'weight'], type=str)
 args = parser.parse_args()
 
@@ -80,6 +85,7 @@ folder = args.dataset + '_' + args.noise_mode + '_' + str(args.r)  + '_flow_' + 
 model_save_loc = './checkpoint/' + folder
 if not os.path.exists(model_save_loc):
     os.mkdir(model_save_loc)
+    os.mkdir(model_save_loc + '/JSD_distribution')
 
 ## Log files
 stats_log=open(model_save_loc +'/%s_%.1f_%s'%(args.dataset,args.r,args.noise_mode)+'_stats.txt','w') 
@@ -104,18 +110,12 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
     unlabeled_train_iter = iter(unlabeled_trainloader)    
     num_iter = (len(labeled_trainloader.dataset)//args.batch_size)+1
 
-    ## Loss statistics
-    loss_x = 0
-    loss_u = 0
-    loss_ucl = 0
-    loss_nll = 0
-
-    for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x) in enumerate(labeled_trainloader):      
+    for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x, labels_x_o) in enumerate(labeled_trainloader):      
         try:
-            inputs_u, inputs_u2, inputs_u3, inputs_u4 = unlabeled_train_iter.next()
+            inputs_u, inputs_u2, inputs_u3, inputs_u4, labels_u_o = unlabeled_train_iter.next()
         except:
             unlabeled_train_iter = iter(unlabeled_trainloader)
-            inputs_u, inputs_u2, inputs_u3, inputs_u4 = unlabeled_train_iter.next()
+            inputs_u, inputs_u2, inputs_u3, inputs_u4, labels_u_o = unlabeled_train_iter.next()
         
         batch_size = inputs_x.size(0)
 
@@ -126,6 +126,9 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x = inputs_x.cuda(), inputs_x2.cuda(), inputs_x3.cuda(), inputs_x4.cuda(), labels_x.cuda(), w_x.cuda()
         inputs_u, inputs_u2, inputs_u3, inputs_u4 = inputs_u.cuda(), inputs_u2.cuda(), inputs_u3.cuda(), inputs_u4.cuda()
         
+        labels_x_o = labels_x_o.cuda()
+        labels_u_o = labels_u_o.cuda()
+
         with torch.no_grad():
             # Label co-guessing of unlabeled samples
             features_u11, _ = net(inputs_u)
@@ -134,8 +137,8 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             
             ## Pseudo-label
             targets_u = flowTrainer.get_pseudo_label(flownet, features_u11, features_u12)
-            # flow_outputs_u11 = flowTrainer.predict(flownet, features_u11, policy=args.predictPolicy)
-            # flow_outputs_u12 = flowTrainer.predict(flownet, features_u12, policy=args.predictPolicy)
+            # flow_outputs_u11 = flowTrainer.predict(flownet, features_u11)
+            # flow_outputs_u12 = flowTrainer.predict(flownet, features_u12)
 
             # pu = (flow_outputs_u11 + flow_outputs_u12) / 2
             # ptu = pu**(1/args.T)            ## Temparature Sharpening
@@ -148,8 +151,8 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             features_x2, _ = net(inputs_x2)            
             
             px = flowTrainer.get_pseudo_label(flownet, features_x, features_x2)
-            # flow_outputs_x = flowTrainer.predict(flownet, features_x, policy=args.predictPolicy)
-            # flow_outputs_x2 = flowTrainer.predict(flownet, features_x2, policy=args.predictPolicy)
+            # flow_outputs_x = flowTrainer.predict(flownet, features_x)
+            # flow_outputs_x2 = flowTrainer.predict(flownet, features_x2)
             # px = (flow_outputs_x + flow_outputs_x2) / 2    
             px = w_x*labels_x + (1-w_x)*px
 
@@ -157,6 +160,11 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
                         
             targets_x = ptx / ptx.sum(dim=1, keepdim=True)           
             targets_x = targets_x.detach()
+
+            # Calculate label sources
+            u_sources_pesudo = Dist_Func(targets_u, labels_u_o)
+            x_sources_origin = Dist_Func(labels_x, labels_x_o)
+            x_sources_refine = Dist_Func(targets_x, labels_x_o)
 
         ## Unsupervised Contrastive Loss
         f1, _ = net(inputs_u3)
@@ -171,8 +179,6 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         l = np.random.beta(args.alpha, args.alpha)        
         l = max(l, 1-l)
         all_inputs  = torch.cat([inputs_x3, inputs_x4, inputs_u3, inputs_u4], dim=0)
-        print("size u : ", targets_u.size())
-        print("size x : ", targets_x.size())
         all_targets = torch.cat([targets_x, targets_x, targets_u, targets_u], dim=0)
 
         idx = torch.randperm(all_inputs.size(0))
@@ -185,12 +191,11 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         mixed_target = l * target_a + (1 - l) * target_b
                 
         flow_feature, logits = net(mixed_input) # add flow_feature
-        logits_x = logits[:batch_size*2]
-        logits_u = logits[batch_size*2:]        
+        # logits_x = logits[:batch_size*2]
+        # logits_u = logits[batch_size*2:]        
         
         ## Combined Loss
-        if (args.oneNet):
-            Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
+        # Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
         
         ## Regularization
         prior = torch.ones(args.num_class)/args.num_class
@@ -208,22 +213,13 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         delta_log_p2 = delta_log_p2.view(flow_mixed_target.size()[0], flow_mixed_target.shape[1], 1).sum(1)
         log_p2 = (approx2 - delta_log_p2)
 
-        lamb = linear_rampup(epoch, warm_up)
+        lamb_x = linear_rampup(epoch, warm_up, args.lambda_x) + 1
+        lamb_u = linear_rampup(epoch, warm_up, args.lambda_u)
 
-        loss_flow_nll_x = -log_p2[:batch_size*2].mean()
-        loss_flow_nll_u = -log_p2[batch_size*2:].mean()
-        loss_flow_nll = loss_flow_nll_x + lamb * loss_flow_nll_u 
+        loss_nll_x = -log_p2[:batch_size*2].mean()
+        loss_nll_u = -log_p2[batch_size*2:].mean()
         ## Total Loss
-        if (args.oneNet):
-            loss = Lx + lamb * Lu + args.lambda_c*loss_simCLR + penalty + loss_flow_nll
-        else:
-            loss = args.lambda_c*loss_simCLR + loss_flow_nll
-
-        ## Accumulate Loss
-        loss_x += loss_flow_nll_x.item()
-        loss_u += loss_flow_nll_u.item()
-        loss_ucl += loss_simCLR.item()
-        loss_nll += loss_flow_nll.item()
+        loss = args.lambda_c * loss_simCLR + penalty + lamb_x * loss_nll_x + lamb_u * loss_nll_u
 
         # Compute gradient and Do SGD step
         optimizer.zero_grad()
@@ -236,24 +232,24 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         if (wandb != None):
             logMsg = {}
             logMsg["epoch"] = epoch
-            logMsg["loss/loss_nll"] = loss_nll/(batch_idx+1)
-            logMsg["loss/loss_x"] = loss_x/(batch_idx+1)
-            logMsg["loss/loss_u"] = loss_u/(batch_idx+1)
-            logMsg["loss/loss_ucl"] = loss_ucl/(batch_idx+1)
+            logMsg["loss/nll_x"] = loss_nll_x.item()
+            logMsg["loss/nll_u"] = loss_nll_u.item()
+            logMsg["loss/simCLR"] = loss_simCLR.item()
+
+            logMsg["label_quality/unlabel_pesudo_JSD_mean"] = u_sources_pesudo.mean().item()
+            logMsg["label_quality/label_origin_JSD_mean"] = x_sources_origin.mean().item()
+            logMsg["label_quality/label_refine_JSD_mena"] = x_sources_refine.mean().item()
+
             wandb.log(logMsg)
 
         sys.stdout.write('\r')
-        sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Contrastive Loss:%.4f NLL loss: %.2f'
-                %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_ucl/(batch_idx+1),  loss_nll/(batch_idx+1)))
+        sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Contrastive Loss:%.4f NLL(x) loss: %.2f NLL(u) loss: %.2f'
+                %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_simCLR.item(),  loss_nll_x.item(), loss_nll_u.item()))
         sys.stdout.flush()
 
 
 ## For Standard Training 
-def warmup_standard(epoch,net,flownet, optimizer, optimizerFlow, dataloader):
-
-    loss_nll_t = 0
-    loss_ce_t = 0
-
+def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
     net.train()
     num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
     
@@ -262,14 +258,14 @@ def warmup_standard(epoch,net,flownet, optimizer, optimizerFlow, dataloader):
         optimizer.zero_grad()
         optimizerFlow.zero_grad()
         feature, outputs = net(inputs)               
-        loss_ce    = CEloss(outputs, labels)    
+        loss_ce = CEloss(outputs, labels)    
 
         # == flow ==
         feature = F.normalize(feature, dim=1)
         labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
         flow_labels = labels_one_hot.unsqueeze(1).cuda()
         
-        delta_p = torch.zeros(flow_labels.shape[0], flow_labels.shape[1], 1).cuda() 
+        delta_p = torch.zeros(flow_labels.shape[0], flow_labels.shape[1], 1).cuda()
         approx21, delta_log_p2 = flownet(flow_labels, feature, delta_p)
         
         approx2 = standard_normal_logprob(approx21).view(flow_labels.size()[0], -1).sum(1, keepdim=True)
@@ -277,17 +273,15 @@ def warmup_standard(epoch,net,flownet, optimizer, optimizerFlow, dataloader):
         log_p2 = (approx2 - delta_log_p2)
         loss_nll = -log_p2.mean()
         # == flow end ===
-        loss = loss_nll + loss_ce
 
         if args.noise_mode=='asym':     # Penalize confident prediction for asymmetric noise
             penalty = conf_penalty(outputs)
-            L = loss + penalty      
+            L = loss_nll + penalty + loss_ce   
         else:   
-            L = loss
+            L = loss_nll + loss_ce
 
-        loss_nll_t += loss_nll.item()
-        loss_ce_t += loss_ce.item()
-        L.backward()  
+        L.backward()
+
         optimizer.step()  
         optimizerFlow.step()              
 
@@ -295,14 +289,12 @@ def warmup_standard(epoch,net,flownet, optimizer, optimizerFlow, dataloader):
         if (wandb != None):
             logMsg = {}
             logMsg["epoch"] = epoch
-            logMsg["loss/nll+ce"] = (loss_nll_t + loss_ce_t) / (batch_idx + 1)
-            logMsg["loss/nll"] = loss_nll_t / (batch_idx + 1)
-            logMsg["loss/ce"] = loss_ce_t / (batch_idx + 1)
+            logMsg["loss/nll"] = loss_nll.item()
             wandb.log(logMsg)
 
         sys.stdout.write('\r')
-        sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t CE-loss: %.4f NLL-loss: %.4f'
-                %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_ce_t / (batch_idx + 1), loss_nll_t / (batch_idx + 1)))
+        sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t NLL-loss: %.4f'
+                %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
         sys.stdout.flush()
 
 ## For Training Accuracy
@@ -319,10 +311,11 @@ def warmup_val(epoch,net,optimizer, optimizerFlow,dataloader):
             inputs, labels = inputs.cuda(), labels.cuda() 
             optimizer.zero_grad()
             optimizerFlow.zero_grad()
-            _, outputs  = net(inputs)               
+            _, outputs  = net(inputs)
+
             _, predicted = torch.max(outputs, 1)    
-            loss    = CEloss(outputs, labels)    
-            loss_x += loss.item()                      
+            # loss    = CEloss(outputs, labels)    
+            # loss_x += loss.item()                      
 
             total   += labels.size(0)
             correct += predicted.eq(labels).cpu().sum().item()
@@ -358,8 +351,6 @@ def test(epoch,net,flowNet):
     
     test_log.write(str(acc)+'\n')
     test_log.flush()  
-    # test_loss_log.write(str(loss_x/(batch_idx+1))+'\n')
-    # test_loss_log.flush()
     return acc
 
 
@@ -376,9 +367,25 @@ class Jensen_Shannon(nn.Module):
         m = (p+q)/2
         return 0.5*kl_divergence(p, m) + 0.5*kl_divergence(q, m)
 
+def Selection_Rate(prob):
+    threshold = torch.mean(prob)
+    if threshold.item()>args.d_u:
+        threshold = threshold - (threshold-torch.min(prob))/args.tau
+    SR = torch.sum(prob<threshold).item()/num_samples
+
+    if SR <= 0 or SR >= 1.0:
+        new_SR = np.clip(SR, 1/args.num_class, 0.9)
+        print(f'WARNING: sample rate = {SR}, set to {new_SR}')
+        SR = new_SR
+    return SR, threshold
+
+def Dist_Func(pred, target):
+    JS_dist = Jensen_Shannon()
+    dist = JS_dist(pred, F.one_hot(target, num_classes = args.num_class))
+    return dist
+
 ## Calculate JSD
 def Calculate_JSD(net, flowNet, num_samples):  
-    JS_dist = Jensen_Shannon()
     JSD   = torch.zeros(num_samples)    
 
     for batch_idx, (inputs, targets, index) in tqdm(enumerate(eval_loader)):
@@ -391,14 +398,13 @@ def Calculate_JSD(net, flowNet, num_samples):
             out = flowTrainer.predict(flowNet, feature)
 
         ## Divergence clculator to record the diff. between ground truth and output prob. dist.  
-        dist = JS_dist(out,  F.one_hot(targets, num_classes = args.num_class))
+        dist = Dist_Func(out, targets)
         JSD[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = dist
 
     return JSD
 
 ## Calculate JSD
 def Calculate_JSD_onenet(model, num_samples):  
-    JS_dist = Jensen_Shannon()
     JSD   = torch.zeros(num_samples)    
 
     for batch_idx, (inputs, targets, index) in enumerate(eval_loader):
@@ -410,16 +416,17 @@ def Calculate_JSD_onenet(model, num_samples):
             out = torch.nn.Softmax(dim=1).cuda()(model(inputs)[1])     
 
         ## Divergence clculator to record the diff. between ground truth and output prob. dist.  
-        dist = JS_dist(out,  F.one_hot(targets, num_classes = args.num_class))
+        dist = Dist_Func(out, targets)
         JSD[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = dist
 
     return JSD
 
-def logJSD(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader):
+def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
     labeled_idx = labeled_trainloader.dataset.pred_idx
     unlabeled_idx = unlabeled_trainloader.dataset.pred_idx
-    labeled_prob = [prob[i] for i in labeled_idx]
-    unlabeled_prob = [prob[i] for i in unlabeled_idx]
+    origin_prob =  labeled_trainloader.dataset.origin_prob
+    labeled_prob = [origin_prob[i] for i in labeled_idx]
+    unlabeled_prob = [origin_prob[i] for i in unlabeled_idx]
     sample_ratio = torch.sum(prob<threshold).item()/num_samples
 
     num_cleanset, num_noiseset = len(labeled_trainloader.dataset), len(unlabeled_trainloader.dataset)
@@ -428,8 +435,11 @@ def logJSD(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader):
     cleanset_o_label, cleanset_n_label = labeled_trainloader.dataset.origin_label, labeled_trainloader.dataset.noise_label
     noiseset_o_label, noiseset_n_label = unlabeled_trainloader.dataset.origin_label, unlabeled_trainloader.dataset.noise_label
 
-    num_cleanset_noise = (cleanset_o_label != cleanset_n_label).astype(float).sum()
-    num_noiseset_noise = (noiseset_o_label != noiseset_n_label).astype(float).sum()
+    cleanset_noise_mask = (cleanset_o_label != cleanset_n_label).astype(float)
+    noiseset_noise_mask = (noiseset_o_label != noiseset_n_label).astype(float)
+    
+    num_cleanset_noise = cleanset_noise_mask.sum()
+    num_noiseset_noise = noiseset_noise_mask.sum()
     num_noise = num_cleanset_noise + num_noiseset_noise
 
     num_cleanset_clean = num_cleanset - num_cleanset_noise
@@ -445,6 +455,31 @@ def logJSD(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader):
     noise_precision = num_noiseset_noise / (num_noiseset + eps)
     noise_f1 = (2 * noise_recall * noise_precision) / (noise_recall + noise_precision + eps)
 
+    # draw JSD dis
+    clean_prob = []
+    noise_prob = []
+    for idx_noise_zip in [zip(labeled_idx, cleanset_noise_mask), zip(unlabeled_idx, noiseset_noise_mask)]:
+        for idx, is_noise in idx_noise_zip:
+            p = origin_prob[idx]
+            if is_noise == 1.0:
+                noise_prob.append(float(p))
+            else:
+                clean_prob.append(float(p))
+
+    plt.clf()
+    kwargs = dict(histtype='stepfilled', alpha=0.75, density=False, bins=10)
+    plt.hist(clean_prob, color='green', range=(0., 1.), label='clean', **kwargs)
+    plt.hist(noise_prob, color='red'  , range=(0., 1.), label='noisy', **kwargs)
+
+    plt.axvline(x=threshold,          color='black')
+    plt.axvline(x=origin_prob.mean(), color='gray')
+    plt.xlabel('JSD Values')
+    plt.ylabel('count')
+    plt.title('JSD Distribution of N Samples epoch :{epoch}')
+    plt.xlim(0, 1)
+    plt.grid(True)
+    plt.savefig(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
+
     if (wandb != None):
         logMsg = {}
         logMsg["epoch"] = epoch
@@ -454,6 +489,11 @@ def logJSD(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader):
         logMsg["JSD/labeled_var"] = np.var(labeled_prob)
         logMsg["JSD/unlabeled_mean"] = np.mean(unlabeled_prob)
         logMsg["JSD/unlabeled_var"] = np.var(unlabeled_prob)
+
+        logMsg["JSD_clean/labeled_mean"] =  np.mean(labeled_prob)
+        logMsg["JSD_clean/labeled_var"] = np.var(labeled_prob)
+        logMsg["JSD_clean/unlabeled_mean"] = np.mean(unlabeled_prob)
+        logMsg["JSD_clean/unlabeled_var"] = np.var(unlabeled_prob)
 
         logMsg["JSD_selection/clean_recall"] = clean_recall
         logMsg["JSD_selection/clean_precision"] = clean_precision
@@ -465,16 +505,16 @@ def logJSD(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader):
         wandb.log(logMsg)
 
 ## Unsupervised Loss coefficient adjustment 
-def linear_rampup(current, warm_up, rampup_length=64):
+def linear_rampup(current, warm_up, rampup_length=16, lambda_w=1.0):
     current = np.clip((current-warm_up) / rampup_length, 0.0, 1.0)
-    return args.lambda_u*float(current)
+    return lambda_w * float(current)
 
 class SemiLoss(object):
     def __call__(self, outputs_x, targets_x, outputs_u, targets_u, epoch, warm_up):
         probs_u = torch.softmax(outputs_u, dim=1)
         Lx = -torch.mean(torch.sum(F.log_softmax(outputs_x, dim=1) * targets_x, dim=1))
         Lu = torch.mean((probs_u - targets_u)**2)
-        return Lx, Lu, linear_rampup(epoch,warm_up)
+        return Lx, Lu, linear_rampup(epoch,warm_up, args.lambda_u)
 
 class NegEntropy(object):
     def __call__(self,outputs):
@@ -511,10 +551,10 @@ criterion  = SemiLoss()
 
 ## Optimizer and Scheduler
 optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4) 
-optimizerFlow = optim.SGD(flowNet.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4) 
+optimizerFlow = optim.SGD(flowNet.parameters(), lr=args.lr_f, momentum=0.9, weight_decay=5e-4) 
 
-scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, 280, 2e-4)
-schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, 280, 2e-4)
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epochs, args.lr / 100)
+schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, args.num_epochs, args.lr_f / 100)
 
 ## Loss Functions
 CE       = nn.CrossEntropyLoss(reduction='none')
@@ -550,26 +590,18 @@ for epoch in range(start_epoch,args.num_epochs+1):
     if epoch<warm_up:       
         warmup_trainloader = loader.run(0, 'warmup')
 
-        print('Warmup Model 1')
+        print('Warmup Model')
         warmup_standard(epoch, net, flowNet, optimizer, optimizerFlow, warmup_trainloader)   
     
     else:
         ## Calculate JSD values and Filter Rate
         print("Calculate JSD")
-        
-        if (args.oneNet):
-            prob = Calculate_JSD_onenet(net, num_samples)
-        else:
-            prob = Calculate_JSD(net, flowNet, num_samples)
-        print("prob s", prob.size())
-        threshold = torch.mean(prob)
-        if threshold.item()>args.d_u:
-            threshold = threshold - (threshold-torch.min(prob))/args.tau
-        SR = torch.sum(prob<threshold).item()/num_samples    
+        prob = Calculate_JSD(net, flowNet, num_samples)
+        SR , threshold = Selection_Rate(prob)
         
         print('Train Net\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
-        logJSD(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader)
+        logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
         train(epoch, net, flowNet,optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
 
     acc = test(epoch,net, flowNet)
