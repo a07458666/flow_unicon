@@ -90,7 +90,7 @@ class FlowTrainer:
         return -densitys
 
 
-    def predict(self, net, feature, mean = 0, std = 0.2, sample_n = 10):
+    def predict(self, net, feature, mean = 0, std = 0, sample_n = 1):
         batch_size = feature.size()[0]
         feature = feature.repeat(sample_n, 1, 1)
         input_z = torch.normal(mean = mean, std = std, size=(sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
@@ -139,14 +139,8 @@ class FlowTrainer:
         pu = (flow_outputs_u11 + flow_outputs_u12) / 2
 
         if(self.args.predictPolicy == "weight"):
-            # print("pu size()", pu.size())
-            # print("pu", pu[:10])
             pu_label = torch.distributions.Categorical(pu).sample()
-            # print("pu_label size()", pu_label.size())
-            # print("pu_label : ", pu_label[:10])
             pu_onehot = self.torch_onehot(pu_label, pu.shape[1]).detach()
-            # print("pu_onehot : ", pu_onehot[:10])
-            # print("pu_onehot size()", pu_onehot.size())
             return pu_onehot
         else:
             ptu = pu**(1/self.args.T)            ## Temparature Sharpening
