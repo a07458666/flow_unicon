@@ -175,22 +175,24 @@ class cifar_dataset(Dataset):
     def __getitem__(self, index):
         if self.mode=='labeled':
             img, target, prob = self.train_data[index], self.noise_label[index], self.probability[index]
+            o_target = self.origin_label[index]
             image = Image.fromarray(img)
             img1 = self.transform[0](image)
             img2 = self.transform[1](image)
             img3 = self.transform[2](image)
             img4 = self.transform[3](image)
 
-            return img1, img2, img3, img4,  target, prob   
+            return img1, img2, img3, img4,  target, prob, o_target
 
         elif self.mode=='unlabeled':
             img = self.train_data[index]
+            o_target = self.origin_label[index]
             image = Image.fromarray(img)
             img1 = self.transform[0](image)
             img2 = self.transform[1](image)
             img3 = self.transform[2](image)
             img4 = self.transform[3](image)
-            return img1, img2, img3, img4
+            return img1, img2, img3, img4, o_target
 
         elif self.mode=='all':
             img, target = self.train_data[index], self.noise_label[index]
