@@ -148,9 +148,9 @@ class FlowTrainer:
             # print("pu_onehot : ", pu_onehot[:10])
             # print("pu_onehot size()", pu_onehot.size())
             return pu_onehot
+        else:
+            ptu = pu**(1/self.args.T)            ## Temparature Sharpening
 
-        ptu = pu**(1/self.args.T)            ## Temparature Sharpening
-
-        targets_u = ptu / ptu.sum(dim=1, keepdim=True)
-        targets_u = targets_u.detach()
-        return targets_u
+            targets_u = ptu / ptu.sum(dim=1, keepdim=True)
+            targets_u = targets_u.detach()
+            return targets_u
