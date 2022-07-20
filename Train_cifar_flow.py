@@ -43,6 +43,8 @@ parser.add_argument('--lr_f', '--flow_learning_rate', default=2e-5, type=float, 
 parser.add_argument('--noise_mode',  default='sym')
 parser.add_argument('--alpha', default=4, type=float, help='parameter for Beta')
 parser.add_argument('--lambda_u', default=1, type=float, help='weight for unsupervised loss')
+parser.add_argument('--len_u', default=16, type=float, help='weight for unsupervised loss')
+parser.add_argument('--warmup_u', default=10, type=float, help='weight for unsupervised loss')
 parser.add_argument('--lambda_x', default=30, type=float, help='weight for supervised loss')
 parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
 parser.add_argument('--T', default=0.5, type=float, help='sharpening temperature')
@@ -153,13 +155,14 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             px = flowTrainer.get_pseudo_label(flownet, features_x, features_x2)
             # flow_outputs_x = flowTrainer.predict(flownet, features_x)
             # flow_outputs_x2 = flowTrainer.predict(flownet, features_x2)
-            # px = (flow_outputs_x + flow_outputs_x2) / 2    
+            # px = (flow_outputs_x + flow_outputs_x2) / 2   
             px = w_x*labels_x + (1-w_x)*px
 
             ptx = px**(1/args.T)    ## Temparature sharpening 
                         
             targets_x = ptx / ptx.sum(dim=1, keepdim=True)           
             targets_x = targets_x.detach()
+            # targets_x = labels_x
 
             # Calculate label sources
             u_sources_pesudo = Dist_Func(targets_u, labels_u_o)
@@ -214,12 +217,12 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         log_p2 = (approx2 - delta_log_p2)
 
         lamb_x = linear_rampup(epoch, warm_up, args.lambda_x) + 1
-        lamb_u = linear_rampup(epoch, warm_up, args.lambda_u)
+        lamb_u = linear_rampup(epoch, args.warmup_u, args.len_u, args.lambda_u)
 
         loss_nll_x = -log_p2[:batch_size*2].mean()
         loss_nll_u = -log_p2[batch_size*2:].mean()
         ## Total Loss
-        loss = args.lambda_c * loss_simCLR + penalty + lamb_x * loss_nll_x + lamb_u * loss_nll_u
+        loss = args.lambda_c * loss_simCLR + lamb_x * loss_nll_x + lamb_u * loss_nll_u #+ penalty
 
         # Compute gradient and Do SGD step
         optimizer.zero_grad()
@@ -258,7 +261,7 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
         optimizer.zero_grad()
         optimizerFlow.zero_grad()
         feature, outputs = net(inputs)               
-        loss_ce = CEloss(outputs, labels)    
+        #loss_ce = CEloss(outputs, labels)    
 
         # == flow ==
         feature = F.normalize(feature, dim=1)
@@ -276,9 +279,9 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
 
         if args.noise_mode=='asym':     # Penalize confident prediction for asymmetric noise
             penalty = conf_penalty(outputs)
-            L = loss_nll + penalty + loss_ce   
+            L = loss_nll + penalty #+ loss_ce   
         else:   
-            L = loss_nll + loss_ce
+            L = loss_nll #+ loss_ce
 
         L.backward()
 
@@ -467,7 +470,7 @@ def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
                 clean_prob.append(float(p))
 
     plt.clf()
-    kwargs = dict(histtype='stepfilled', alpha=0.75, density=False, bins=10)
+    kwargs = dict(histtype='stepfilled', alpha=0.75, density=False, bins=20)
     plt.hist(clean_prob, color='green', range=(0., 1.), label='clean', **kwargs)
     plt.hist(noise_prob, color='red'  , range=(0., 1.), label='noisy', **kwargs)
 
@@ -475,7 +478,7 @@ def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
     plt.axvline(x=origin_prob.mean(), color='gray')
     plt.xlabel('JSD Values')
     plt.ylabel('count')
-    plt.title('JSD Distribution of N Samples epoch :{epoch}')
+    plt.title(f'JSD Distribution of N Samples epoch :{epoch}')
     plt.xlim(0, 1)
     plt.grid(True)
     plt.savefig(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
@@ -606,6 +609,7 @@ for epoch in range(start_epoch,args.num_epochs+1):
 
     acc = test(epoch,net, flowNet)
     scheduler.step()
+    schedulerFlow.step()
 
     if acc > best_acc:
         if epoch <warm_up:
