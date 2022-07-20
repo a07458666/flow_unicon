@@ -14,6 +14,7 @@ from PreResNet_cifar import *
 import dataloader_cifar as dataloader
 from math import log2
 from Contrastive_loss import *
+import matplotlib.pyplot as plt
 
 import collections.abc
 from collections.abc import MutableMapping
