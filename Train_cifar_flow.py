@@ -162,6 +162,8 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
                         
             targets_x = ptx / ptx.sum(dim=1, keepdim=True)           
             targets_x = targets_x.detach()
+            # print("targets_x : ", targets_x[:10])
+            # print("targets_u : ", targets_u[:10])
             # targets_x = labels_x
 
             # Calculate label sources
