@@ -48,6 +48,7 @@ parser.add_argument('--resume', default=False, type=bool, help = 'Resume from th
 parser.add_argument('--num_class', default=10, type=int)
 parser.add_argument('--data_path', default='./data/cifar10', type=str, help='path to dataset')
 parser.add_argument('--dataset', default='cifar10', type=str)
+parser.add_argument('--name', default="", type=str)
 args = parser.parse_args()
 
 ## GPU Setup 
@@ -65,10 +66,11 @@ else:
     torchvision.datasets.CIFAR100(args.data_path,train=False, download=True)
 
 ## Checkpoint Location
-folder = args.dataset + '_' + args.noise_mode + '_' + str(args.r) 
+folder = args.dataset + '_' + args.noise_mode + '_' + str(args.r) + str(args.name)
 model_save_loc = './checkpoint/' + folder
 if not os.path.exists(model_save_loc):
     os.mkdir(model_save_loc)
+    os.mkdir(model_save_loc + '/JSD_distribution')
 
 ## Log files
 stats_log=open(model_save_loc +'/%s_%.1f_%s'%(args.dataset,args.r,args.noise_mode)+'_stats.txt','w') 
@@ -99,12 +101,12 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
     loss_scl = 0
     loss_ucl = 0
 
-    for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x) in enumerate(labeled_trainloader):      
+    for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x, labels_x_o) in enumerate(labeled_trainloader):      
         try:
-            inputs_u, inputs_u2, inputs_u3, inputs_u4 = unlabeled_train_iter.next()
+            inputs_u, inputs_u2, inputs_u3, inputs_u4, labels_u_o = unlabeled_train_iter.next()
         except:
             unlabeled_train_iter = iter(unlabeled_trainloader)
-            inputs_u, inputs_u2, inputs_u3, inputs_u4 = unlabeled_train_iter.next()
+            inputs_u, inputs_u2, inputs_u3, inputs_u4, labels_u_o = unlabeled_train_iter.next()
         
         batch_size = inputs_x.size(0)
 
@@ -114,7 +116,10 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
 
         inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x = inputs_x.cuda(), inputs_x2.cuda(), inputs_x3.cuda(), inputs_x4.cuda(), labels_x.cuda(), w_x.cuda()
         inputs_u, inputs_u2, inputs_u3, inputs_u4 = inputs_u.cuda(), inputs_u2.cuda(), inputs_u3.cuda(), inputs_u4.cuda()
-        
+
+        labels_x_o = labels_x_o.cuda()
+        labels_u_o = labels_u_o.cuda()
+
         with torch.no_grad():
             # Label co-guessing of unlabeled samples
             _, outputs_u11 = net(inputs_u)
@@ -141,6 +146,10 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
                         
             targets_x = ptx / ptx.sum(dim=1, keepdim=True)           
             targets_x = targets_x.detach()
+
+            u_sources_pesudo = Dist_Func(targets_u, labels_u_o)
+            x_sources_origin = Dist_Func(labels_x, labels_x_o)
+            x_sources_refine = Dist_Func(targets_x, labels_x_o)
 
         ## Unsupervised Contrastive Loss
         f1, _ = net(inputs_u3)
@@ -199,6 +208,10 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
             logMsg["loss/loss_x"] = loss_x/(batch_idx+1)
             logMsg["loss/loss_u"] = loss_u/(batch_idx+1)
             logMsg["loss/loss_ucl"] = loss_ucl/(batch_idx+1)
+
+            logMsg["label_quality/unlabel_pesudo_JSD_mean"] = u_sources_pesudo.mean().item()
+            logMsg["label_quality/label_origin_JSD_mean"] = x_sources_origin.mean().item()
+            logMsg["label_quality/label_refine_JSD_mena"] = x_sources_refine.mean().item()
             wandb.log(logMsg)
 
         sys.stdout.write('\r')
@@ -206,6 +219,10 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
                 %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_x/(batch_idx+1), loss_u/(batch_idx+1),  loss_ucl/(batch_idx+1)))
         sys.stdout.flush()
 
+def Dist_Func(pred, target):
+    JS_dist = Jensen_Shannon()
+    dist = JS_dist(pred, F.one_hot(target, num_classes = args.num_class))
+    return dist
 
 ## For Standard Training 
 def warmup_standard(epoch,net,optimizer,dataloader):
@@ -357,13 +374,64 @@ def Calculate_JSD(model1, model2, num_samples):
 
     return JSD
 
-def logJSD(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader):
+def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
     labeled_idx = labeled_trainloader.dataset.pred_idx
     unlabeled_idx = unlabeled_trainloader.dataset.pred_idx
-    labeled_prob = [prob[i] for i in labeled_idx]
-    unlabeled_prob = [prob[i] for i in unlabeled_idx]
+    origin_prob =  labeled_trainloader.dataset.origin_prob
+    labeled_prob = [origin_prob[i] for i in labeled_idx]
+    unlabeled_prob = [origin_prob[i] for i in unlabeled_idx]
     sample_ratio = torch.sum(prob<threshold).item()/num_samples
 
+    num_cleanset, num_noiseset = len(labeled_trainloader.dataset), len(unlabeled_trainloader.dataset)
+    num_wholeset = num_cleanset + num_noiseset
+
+    cleanset_o_label, cleanset_n_label = labeled_trainloader.dataset.origin_label, labeled_trainloader.dataset.noise_label
+    noiseset_o_label, noiseset_n_label = unlabeled_trainloader.dataset.origin_label, unlabeled_trainloader.dataset.noise_label
+
+    cleanset_noise_mask = (cleanset_o_label != cleanset_n_label).astype(float)
+    noiseset_noise_mask = (noiseset_o_label != noiseset_n_label).astype(float)
+    
+    num_cleanset_noise = cleanset_noise_mask.sum()
+    num_noiseset_noise = noiseset_noise_mask.sum()
+    num_noise = num_cleanset_noise + num_noiseset_noise
+
+    num_cleanset_clean = num_cleanset - num_cleanset_noise
+    num_noiseset_clean = num_noiseset - num_noiseset_noise
+    num_clean = num_wholeset - num_noise
+
+    eps = 1e-20
+    clean_recall = num_cleanset_clean / (num_clean + eps)
+    clean_precision = num_cleanset_clean / (num_cleanset + eps)
+    clean_f1 = (2 * clean_recall * clean_precision) / (clean_recall + clean_precision + eps)
+
+    noise_recall = num_noiseset_noise / (num_noise + eps)
+    noise_precision = num_noiseset_noise / (num_noiseset + eps)
+    noise_f1 = (2 * noise_recall * noise_precision) / (noise_recall + noise_precision + eps)
+
+    # draw JSD dis
+    clean_prob = []
+    noise_prob = []
+    for idx_noise_zip in [zip(labeled_idx, cleanset_noise_mask), zip(unlabeled_idx, noiseset_noise_mask)]:
+        for idx, is_noise in idx_noise_zip:
+            p = origin_prob[idx]
+            if is_noise == 1.0:
+                noise_prob.append(float(p))
+            else:
+                clean_prob.append(float(p))
+
+    plt.clf()
+    kwargs = dict(histtype='stepfilled', alpha=0.75, density=False, bins=10)
+    plt.hist(clean_prob, color='green', range=(0., 1.), label='clean', **kwargs)
+    plt.hist(noise_prob, color='red'  , range=(0., 1.), label='noisy', **kwargs)
+
+    plt.axvline(x=threshold,          color='black')
+    plt.axvline(x=origin_prob.mean(), color='gray')
+    plt.xlabel('JSD Values')
+    plt.ylabel('count')
+    plt.title('JSD Distribution of N Samples epoch :{epoch}')
+    plt.xlim(0, 1)
+    plt.grid(True)
+    plt.savefig(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
 
     if (wandb != None):
         logMsg = {}
@@ -374,6 +442,19 @@ def logJSD(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader):
         logMsg["JSD/labeled_var"] = np.var(labeled_prob)
         logMsg["JSD/unlabeled_mean"] = np.mean(unlabeled_prob)
         logMsg["JSD/unlabeled_var"] = np.var(unlabeled_prob)
+
+        logMsg["JSD_clean/labeled_mean"] =  np.mean(labeled_prob)
+        logMsg["JSD_clean/labeled_var"] = np.var(labeled_prob)
+        logMsg["JSD_clean/unlabeled_mean"] = np.mean(unlabeled_prob)
+        logMsg["JSD_clean/unlabeled_var"] = np.var(unlabeled_prob)
+
+        logMsg["JSD_selection/clean_recall"] = clean_recall
+        logMsg["JSD_selection/clean_precision"] = clean_precision
+        logMsg["JSD_selection/clean_f1"] = clean_f1
+    
+        logMsg["JSD_selection/noise_recall"] = noise_recall
+        logMsg["JSD_selection/noise_precision"] = noise_precision
+        logMsg["JSD_selection/noise_f1"] = noise_f1
         wandb.log(logMsg)
 
 ## Unsupervised Loss coefficient adjustment 
@@ -473,7 +554,7 @@ for epoch in range(start_epoch,args.num_epochs+1):
 
         print('Train Net1\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
-        logJSD(epoch, threshold, prob, labeled_trainloader, unlabeled_trainloader)
+        logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
         train(epoch,net1,net2,optimizer1,labeled_trainloader, unlabeled_trainloader)    # train net1  
 
         ## Calculate JSD values and Filter Rate
