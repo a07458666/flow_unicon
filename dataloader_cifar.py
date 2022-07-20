@@ -318,14 +318,16 @@ class cifar_dataloader():
             labeled_dataset = cifar_dataset(dataset=self.dataset, sample_ratio= sample_ratio, noise_mode=self.noise_mode, r=self.r, root_dir=self.root_dir, transform=self.transforms["labeled"], mode="labeled", noise_file=self.noise_file, pred=pred, probability=prob,log=self.log)              
             labeled_trainloader = DataLoader(
                 dataset=labeled_dataset, 
-                batch_size=self.batch_size,
+                # batch_size=self.batch_size,
+                batch_size=int(self.batch_size * (2 * sample_ratio)),
                 shuffle=True,
                 num_workers=self.num_workers, drop_last=True)  
 
             unlabeled_dataset = cifar_dataset(dataset=self.dataset, sample_ratio= sample_ratio, noise_mode=self.noise_mode, r=self.r, root_dir=self.root_dir, transform=self.transforms["unlabeled"], mode="unlabeled", noise_file=self.noise_file, pred=pred)                    
             unlabeled_trainloader = DataLoader(
                 dataset=unlabeled_dataset, 
-                batch_size= int(self.batch_size/(2*sample_ratio)),
+                # batch_size= int(self.batch_size/(2*sample_ratio)),
+                batch_size= int(self.batch_size/(2 * (1 - sample_ratio))),
                 shuffle=True,
                 num_workers=self.num_workers, drop_last =True)    
 
