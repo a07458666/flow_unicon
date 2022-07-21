@@ -39,7 +39,7 @@ parser.add_argument('--batch_size', default=256, type=int, help='train batchsize
 parser.add_argument('--lr', '--learning_rate', default=0.02, type=float, help='initial learning rate')
 parser.add_argument('--noise_mode',  default='sym')
 parser.add_argument('--num_epochs', default=350, type=int)
-parser.add_argument('--r', default=0.5, type=float, help='noise ratio')
+parser.add_argument('--r', default=0., type=float, help='noise ratio')
 parser.add_argument('--seed', default=123)
 parser.add_argument('--gpuid', default=0, type=int)
 parser.add_argument('--num_class', default=10, type=int)

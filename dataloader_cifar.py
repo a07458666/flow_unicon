@@ -127,7 +127,7 @@ class cifar_dataset(Dataset):
                 for kk in range(num_class):
                     self.class_ind[kk] = [i for i,x in enumerate(noise_label) if x==kk]    
 
-            if self.mode == 'all':
+            if self.mode == 'all' or self.mode == 'ssl':
                 self.train_data = train_data
                 self.noise_label = noise_label
                 
@@ -193,6 +193,15 @@ class cifar_dataset(Dataset):
             img3 = self.transform[2](image)
             img4 = self.transform[3](image)
             return img1, img2, img3, img4, o_target
+        
+        elif self.mode=='ssl':
+            img, target = self.train_data[index], self.noise_label[index]
+            image = Image.fromarray(img)
+            img1 = self.transform[0](image)
+            img2 = self.transform[1](image)
+            img3 = self.transform[2](image)
+            img4 = self.transform[3](image)
+            return img1, img2, img3, img4, target
 
         elif self.mode=='all':
             img, target = self.train_data[index], self.noise_label[index]
@@ -351,7 +360,7 @@ class cifar_dataloader():
                 num_workers=self.num_workers, drop_last= True)          
             return eval_loader   
         elif mode=='ssl_train':
-            ssl_dataset = cifar_dataset(dataset=self.dataset, sample_ratio= sample_ratio, noise_mode=self.noise_mode, r=self.r, root_dir=self.root_dir, transform=self.transforms["unlabeled"], mode="unlabeled", noise_file=self.noise_file, pred=pred)
+            ssl_dataset = cifar_dataset(dataset=self.dataset, sample_ratio= sample_ratio, noise_mode=self.noise_mode, r=self.r, root_dir=self.root_dir, transform=self.transforms["unlabeled"], mode="ssl")
             ssl_trainloader = DataLoader(
                 dataset=ssl_dataset, 
                 batch_size=self.batch_size,
