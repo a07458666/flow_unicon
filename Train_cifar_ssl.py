@@ -128,8 +128,8 @@ def train(epoch, net, optimizer, trainloader):
             wandb.log(logMsg)
 
         sys.stdout.write('\r')
-        sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Contrastive Loss:%.4f'
-                %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_simCLR.item()))
+        sys.stdout.write('%s: | Epoch [%3d/%3d] Iter[%3d/%3d]\t Contrastive Loss:%.4f'
+                %(args.dataset, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_simCLR.item()))
         sys.stdout.flush()
 
 # def logDistubtion(epoch, trainloader):
