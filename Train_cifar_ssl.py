@@ -38,9 +38,7 @@ parser = argparse.ArgumentParser(description='PyTorch CIFAR Training')
 parser.add_argument('--batch_size', default=256, type=int, help='train batchsize') 
 parser.add_argument('--lr', '--learning_rate', default=0.02, type=float, help='initial learning rate')
 parser.add_argument('--noise_mode',  default='sym')
-parser.add_argument('--alpha', default=4, type=float, help='parameter for Beta')
 parser.add_argument('--num_epochs', default=350, type=int)
-parser.add_argument('--r', default=0.5, type=float, help='noise ratio')
 parser.add_argument('--seed', default=123)
 parser.add_argument('--gpuid', default=0, type=int)
 parser.add_argument('--num_class', default=10, type=int)
@@ -68,7 +66,7 @@ else:
     torchvision.datasets.CIFAR100(args.data_path,train=False, download=True)
 
 ## Checkpoint Location
-folder = args.dataset + '_' + args.noise_mode + '_' + str(args.r)  + '_ssl_' + args.name
+folder = args.dataset + '_' + args.noise_mode + '_ssl_' + args.name
 model_save_loc = './checkpoint/' + folder
 if not os.path.exists(model_save_loc):
     os.mkdir(model_save_loc)
@@ -199,7 +197,6 @@ for epoch in range(start_epoch,args.num_epochs+1):
         checkpoint = {
             'net': net.state_dict(),
             'Model_number': 1,
-            'Noise_Ratio': args.r,
             'Loss Function': 'CrossEntropyLoss',
             'Optimizer': 'SGD',
             'Noise_mode': args.noise_mode,
