@@ -93,6 +93,7 @@ def train(epoch, net, optimizer, trainloader):
     net.train()
 
     num_iter = (len(trainloader.dataset)//args.batch_size)+1
+    avgLoss = 0
 
     for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x) in enumerate(trainloader):      
 
@@ -100,7 +101,6 @@ def train(epoch, net, optimizer, trainloader):
 
         # Transform label to one-hot
         labels_x = torch.zeros(batch_size, args.num_class).scatter_(1, labels_x.view(-1,1), 1)        
-        w_x = w_x.view(-1,1).type(torch.FloatTensor) 
 
         inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x = inputs_x.cuda(), inputs_x2.cuda(), inputs_x3.cuda(), inputs_x4.cuda(), labels_x.cuda()
 
@@ -121,6 +121,7 @@ def train(epoch, net, optimizer, trainloader):
         loss.backward()
         optimizer.step()
 
+        avgLoss += loss.item()
         ## wandb
         if (wandb != None):
             logMsg = {}
@@ -132,6 +133,7 @@ def train(epoch, net, optimizer, trainloader):
         sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Contrastive Loss:%.4f'
                 %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_simCLR.item()))
         sys.stdout.flush()
+    return avgLoss / (batch_idx+1)
 
 # def logDistubtion(epoch, trainloader):
 #     plt.clf()
@@ -179,7 +181,7 @@ model_name = 'Net_ssl.pth'
 
 start_epoch = 0
 
-best_loss = 0
+min_loss = 0
 
 for epoch in range(start_epoch,args.num_epochs+1):   
     test_loader = loader.run(0, 'test')
@@ -191,7 +193,7 @@ for epoch in range(start_epoch,args.num_epochs+1):
 
     scheduler.step()
 
-    if loss > best_loss:
+    if loss < min_loss:
         model_name = 'Net.pth'
 
         print("Save the Model-----")
@@ -209,5 +211,5 @@ for epoch in range(start_epoch,args.num_epochs+1):
         }
 
         torch.save(checkpoint, os.path.join(model_save_loc, model_name))
-        best_loss = loss
+        min_loss = loss
 
