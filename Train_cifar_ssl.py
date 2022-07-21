@@ -20,6 +20,8 @@ from math import log2
 from Contrastive_loss import *
 import matplotlib.pyplot as plt
 
+from flowModule.losses.vicreg import vicreg_loss_func
+
 import collections.abc
 from collections.abc import MutableMapping
 from tqdm import tqdm
@@ -46,6 +48,7 @@ parser.add_argument('--num_class', default=10, type=int)
 parser.add_argument('--data_path', default='./data/cifar10', type=str, help='path to dataset')
 parser.add_argument('--dataset', default='cifar10', type=str)
 parser.add_argument('--name', default="", type=str)
+parser.add_argument('--loss', default='clr', choices=['clr', 'vic'], type=str)
 parser.add_argument('--wandb', action='store_false')
 args = parser.parse_args()
 
@@ -111,10 +114,12 @@ def train(epoch, net, optimizer, trainloader):
         f2 = F.normalize(f2, dim=1)
         features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
 
-        loss_simCLR = contrastive_criterion(features)
-                        
-        ## Total Loss
-        loss = loss_simCLR
+        if args.loss == 'clr':
+            loss_simCLR = contrastive_criterion(features)
+            loss = loss_simCLR
+        elif args.loss == 'vic':
+            loss_vic, loss_sim, loss_var, loss_cov = vicreg_loss_func(f1, f2)
+            loss = loss_vic
 
         # Compute gradient and Do SGD step
         optimizer.zero_grad()
@@ -127,6 +132,10 @@ def train(epoch, net, optimizer, trainloader):
             logMsg = {}
             logMsg["epoch"] = epoch
             logMsg["loss/simCLR"] = loss_simCLR.item()
+            logMsg["loss/sim"] = loss_sim.item()
+            logMsg["loss/var"] = loss_var.item()
+            logMsg["loss/cov"] = loss_cov.item()
+            logMsg["loss/vic"] = loss_vic.item()
             wandb.log(logMsg)
 
         sys.stdout.write('\r')
