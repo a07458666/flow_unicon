@@ -114,11 +114,12 @@ def train(epoch, net, optimizer, trainloader):
         f2 = F.normalize(f2, dim=1)
         features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
 
+        loss_simCLR = contrastive_criterion(features)
+
+        loss_vic, loss_sim, loss_var, loss_cov = vicreg_loss_func(f1, f2)
         if args.loss == 'clr':
-            loss_simCLR = contrastive_criterion(features)
             loss = loss_simCLR
         elif args.loss == 'vic':
-            loss_vic, loss_sim, loss_var, loss_cov = vicreg_loss_func(f1, f2)
             loss = loss_vic
 
         # Compute gradient and Do SGD step
