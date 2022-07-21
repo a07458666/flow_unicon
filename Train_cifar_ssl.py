@@ -184,7 +184,7 @@ best_loss = 0
 for epoch in range(start_epoch,args.num_epochs+1):   
     test_loader = loader.run(0, 'test')
     eval_loader = loader.run(0, 'eval_train')   
-    _, trainloader = loader.run(0, 'ssl_train')
+    trainloader = loader.run(0, 'ssl_train')
     
     print('Train Net\n')
     loss = train(epoch, net, optimizer, trainloader)
