@@ -349,4 +349,12 @@ class cifar_dataloader():
                 batch_size=100,
                 shuffle=False,
                 num_workers=self.num_workers, drop_last= True)          
-            return eval_loader        
+            return eval_loader   
+        elif mode=='ssl_train':
+            ssl_dataset = cifar_dataset(dataset=self.dataset, sample_ratio= sample_ratio, noise_mode=self.noise_mode, r=self.r, root_dir=self.root_dir, transform=self.transforms["unlabeled"], mode="unlabeled", noise_file=self.noise_file, pred=pred)
+            ssl_trainloader = DataLoader(
+                dataset=ssl_dataset, 
+                batch_size=self.batch_size,
+                shuffle=True,
+                num_workers=self.num_workers, drop_last=True)         
+            return ssl_trainloader
