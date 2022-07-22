@@ -42,16 +42,16 @@ parser.add_argument('--lr', '--learning_rate', default=0.02, type=float, help='i
 parser.add_argument('--lr_f', '--flow_learning_rate', default=2e-5, type=float, help='initial flow learning rate')
 parser.add_argument('--noise_mode',  default='sym')
 parser.add_argument('--alpha', default=4, type=float, help='parameter for Beta')
-parser.add_argument('--linear_u', default=16, type=float, help='weight for unsupervised loss')
+parser.add_argument('--linear_u', default=30, type=float, help='weight for unsupervised loss')
 parser.add_argument('--lambda_u', default=1, type=float, help='weight for unsupervised loss')
-parser.add_argument('--linear_x', default=16, type=float, help='weight for unsupervised loss')
+parser.add_argument('--linear_x', default=30, type=float, help='weight for unsupervised loss')
 parser.add_argument('--lambda_x', default=1, type=float, help='weight for supervised loss')
 parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
 parser.add_argument('--T', default=0.5, type=float, help='sharpening temperature')
 parser.add_argument('--num_epochs', default=350, type=int)
 parser.add_argument('--r', default=0.5, type=float, help='noise ratio')
 parser.add_argument('--d_u',  default=0.47, type=float)
-parser.add_argument('--tau', default=3.5, type=float, help='filtering coefficient')
+parser.add_argument('--tau', default=2.5, type=float, help='filtering coefficient')
 parser.add_argument('--metric', type=str, default = 'JSD', help='Comparison Metric')
 parser.add_argument('--seed', default=123)
 parser.add_argument('--gpuid', default=0, type=int)
@@ -235,6 +235,9 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             optimizer.step()
         elif args.fix == 'net':
             optimizerFlow.step()  
+        else:
+            optimizer.step()
+            optimizerFlow.step()  
 
         ## wandb
         if (wandb != None):
@@ -296,7 +299,10 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
         if args.fix == 'flow':
             optimizer.step()
         elif args.fix == 'net':
-            optimizerFlow.step()              
+            optimizerFlow.step()   
+        else:
+            optimizer.step()
+            optimizerFlow.step()  
 
         ## wandb
         if (wandb != None):
