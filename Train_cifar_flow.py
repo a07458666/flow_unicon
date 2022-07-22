@@ -66,6 +66,7 @@ parser.add_argument('--ce', action='store_true')
 parser.add_argument('--fix', default='none', choices=['none', 'net', 'flow'], type=str)
 parser.add_argument('--fix_wp', default='none', choices=['none', 'net', 'flow'], type=str)
 parser.add_argument('--predictPolicy', default='mean', choices=['mean', 'weight'], type=str)
+parser.add_argument('--pretrain', default='', type=str)
 args = parser.parse_args()
 
 ## GPU Setup 
@@ -580,6 +581,9 @@ if args.resume:
     start_epoch = warm_up
     net.load_state_dict(torch.load(os.path.join(model_save_loc, model_name))['net'])
     flowNet.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow))['net'])
+elif args.pretrain != '':
+    warm_up = 1
+    net.load_state_dict(torch.load(args.pretrain)['net'])
 else:
     start_epoch = 0
 
