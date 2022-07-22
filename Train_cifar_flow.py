@@ -42,10 +42,10 @@ parser.add_argument('--lr', '--learning_rate', default=0.02, type=float, help='i
 parser.add_argument('--lr_f', '--flow_learning_rate', default=2e-5, type=float, help='initial flow learning rate')
 parser.add_argument('--noise_mode',  default='sym')
 parser.add_argument('--alpha', default=4, type=float, help='parameter for Beta')
+parser.add_argument('--linear_u', default=16, type=float, help='weight for unsupervised loss')
 parser.add_argument('--lambda_u', default=1, type=float, help='weight for unsupervised loss')
-parser.add_argument('--len_u', default=16, type=float, help='weight for unsupervised loss')
-parser.add_argument('--warmup_u', default=10, type=float, help='weight for unsupervised loss')
-parser.add_argument('--lambda_x', default=30, type=float, help='weight for supervised loss')
+parser.add_argument('--linear_x', default=16, type=float, help='weight for unsupervised loss')
+parser.add_argument('--lambda_x', default=1, type=float, help='weight for supervised loss')
 parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
 parser.add_argument('--T', default=0.5, type=float, help='sharpening temperature')
 parser.add_argument('--num_epochs', default=350, type=int)
@@ -64,7 +64,6 @@ parser.add_argument('--name', default="", type=str)
 parser.add_argument('--flowRefine', action='store_true')
 parser.add_argument('--ce', action='store_true')
 parser.add_argument('--fix', default='none', choices=['none', 'net', 'flow'], type=str)
-parser.add_argument('--fix_wp', default='none', choices=['none', 'net', 'flow'], type=str)
 parser.add_argument('--predictPolicy', default='mean', choices=['mean', 'weight'], type=str)
 parser.add_argument('--pretrain', default='', type=str)
 args = parser.parse_args()
@@ -219,8 +218,8 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         delta_log_p2 = delta_log_p2.view(flow_mixed_target.size()[0], flow_mixed_target.shape[1], 1).sum(1)
         log_p2 = (approx2 - delta_log_p2)
 
-        lamb_x = linear_rampup(epoch, warm_up, args.lambda_x) + 1
-        lamb_u = linear_rampup(epoch, args.warmup_u, args.len_u, args.lambda_u)
+        lamb_x = linear_rampup(epoch, warm_up, args.linear_x, args.lambda_x) + 1
+        lamb_u = linear_rampup(epoch, warm_up, args.linear_u, args.lambda_u)
 
         loss_nll_x = -log_p2[:batch_size*2].mean()
         loss_nll_u = -log_p2[batch_size*2:].mean()
@@ -231,8 +230,11 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         optimizer.zero_grad()
         optimizerFlow.zero_grad()
         loss.backward()
-        optimizer.step()
-        optimizerFlow.step()
+
+        if args.fix == 'flow':
+            optimizer.step()
+        elif args.fix == 'net':
+            optimizerFlow.step()  
 
         ## wandb
         if (wandb != None):
@@ -256,7 +258,10 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
 
 ## For Standard Training 
 def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
-    net.train()
+    if args.fix == 'net':
+        net.eval()
+    else:    
+        net.train()
     num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
     
     for batch_idx, (inputs, labels, path) in enumerate(dataloader):      
@@ -288,8 +293,10 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
 
         L.backward()
 
-        optimizer.step()  
-        optimizerFlow.step()              
+        if args.fix == 'flow':
+            optimizer.step()
+        elif args.fix == 'net':
+            optimizerFlow.step()              
 
         ## wandb
         if (wandb != None):
@@ -582,6 +589,7 @@ if args.resume:
     net.load_state_dict(torch.load(os.path.join(model_save_loc, model_name))['net'])
     flowNet.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow))['net'])
 elif args.pretrain != '':
+    start_epoch = 0
     warm_up = 1
     net.load_state_dict(torch.load(args.pretrain)['net'])
 else:
