@@ -191,7 +191,7 @@ model_name = 'Net_ssl.pth'
 
 start_epoch = 0
 
-min_loss = 0
+min_loss = 99999
 
 for epoch in range(start_epoch,args.num_epochs+1):   
     test_loader = loader.run(0, 'test')
