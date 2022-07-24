@@ -67,7 +67,7 @@ else:
     torchvision.datasets.CIFAR100(args.data_path,train=False, download=True)
 
 ## Checkpoint Location
-folder = args.dataset + '_' + args.noise_mode + '_' + str(args.r) + str(args.name)
+folder = args.dataset + '_' + args.noise_mode + '_' + str(args.r) + '_' + str(args.name)
 model_save_loc = './checkpoint/' + folder
 if not os.path.exists(model_save_loc):
     os.mkdir(model_save_loc)
@@ -429,7 +429,7 @@ def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
     plt.axvline(x=origin_prob.mean(), color='gray')
     plt.xlabel('JSD Values')
     plt.ylabel('count')
-    plt.title('JSD Distribution of N Samples epoch :{epoch}')
+    plt.title(f'JSD Distribution of N Samples epoch :{epoch}')
     plt.xlim(0, 1)
     plt.grid(True)
     plt.savefig(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
