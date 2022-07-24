@@ -67,7 +67,7 @@ else:
     torchvision.datasets.CIFAR100(args.data_path,train=False, download=True)
 
 ## Checkpoint Location
-folder = args.dataset + '_' + args.noise_mode + '_' + str(args.r) + str(args.name)
+folder = args.dataset + '_' + args.noise_mode + '_' + str(args.r) + '_' + str(args.name)
 model_save_loc = './checkpoint/' + folder
 if not os.path.exists(model_save_loc):
     os.mkdir(model_save_loc)
