@@ -41,6 +41,7 @@ parser.add_argument('--batch_size', default=256, type=int, help='train batchsize
 parser.add_argument('--lr', '--learning_rate', default=0.02, type=float, help='initial learning rate')
 parser.add_argument('--lr_f', '--flow_learning_rate', default=2e-5, type=float, help='initial flow learning rate')
 parser.add_argument('--noise_mode',  default='sym')
+parser.add_argument('--alpha_warmup', default=0.2, type=float, help='parameter for Beta (warmup)')
 parser.add_argument('--alpha', default=4, type=float, help='parameter for Beta')
 parser.add_argument('--linear_u', default=30, type=float, help='weight for unsupervised loss')
 parser.add_argument('--lambda_u', default=1, type=float, help='weight for unsupervised loss')
@@ -138,15 +139,15 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
                   
             
             ## Pseudo-label
-            targets_u = flowTrainer.get_pseudo_label(flownet, features_u11, features_u12)
+            pu = flowTrainer.get_pseudo_label(flownet, features_u11, features_u12)
             # flow_outputs_u11 = flowTrainer.predict(flownet, features_u11)
             # flow_outputs_u12 = flowTrainer.predict(flownet, features_u12)
 
             # pu = (flow_outputs_u11 + flow_outputs_u12) / 2
-            # ptu = pu**(1/args.T)            ## Temparature Sharpening
+            ptu = pu**(1/args.T)            ## Temparature Sharpening
             
-            # targets_u = ptu / ptu.sum(dim=1, keepdim=True)
-            # targets_u = targets_u.detach()                  
+            targets_u = ptu / ptu.sum(dim=1, keepdim=True)
+            targets_u = targets_u.detach()                  
 
             ## Label refinement
             features_x, _  = net(inputs_x)
@@ -180,20 +181,11 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
 
         loss_simCLR = contrastive_criterion(features)
 
-        # MixMatch
-        l = np.random.beta(args.alpha, args.alpha)        
-        l = max(l, 1-l)
+
         all_inputs  = torch.cat([inputs_x3, inputs_x4, inputs_u3, inputs_u4], dim=0)
         all_targets = torch.cat([targets_x, targets_x, targets_u, targets_u], dim=0)
 
-        idx = torch.randperm(all_inputs.size(0))
-
-        input_a, input_b   = all_inputs, all_inputs[idx]
-        target_a, target_b = all_targets, all_targets[idx]
-        
-        ## Mixup
-        mixed_input  = l * input_a  + (1 - l) * input_b        
-        mixed_target = l * target_a + (1 - l) * target_b
+        mixed_input, mixed_target = mix_match(all_inputs, all_targets, args.alpha)
                 
         flow_feature, logits = net(mixed_input) # add flow_feature
         # logits_x = logits[:batch_size*2]
@@ -261,6 +253,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
 
 ## For Standard Training 
 def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
+    flownet.train()
     if args.fix == 'net':
         net.eval()
     else:    
@@ -269,15 +262,16 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
     
     for batch_idx, (inputs, labels, path) in enumerate(dataloader):      
         inputs, labels = inputs.cuda(), labels.cuda() 
-        optimizer.zero_grad()
-        optimizerFlow.zero_grad()
-        feature, outputs = net(inputs)               
+        labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
+
+        mixed_input, mixed_target = mix_match(inputs, labels_one_hot, args.alpha_warmup)
+
+        feature, outputs = net(mixed_input)               
         #loss_ce = CEloss(outputs, labels)    
 
         # == flow ==
         feature = F.normalize(feature, dim=1)
-        labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
-        flow_labels = labels_one_hot.unsqueeze(1).cuda()
+        flow_labels = mixed_target.unsqueeze(1).cuda()
         
         delta_p = torch.zeros(flow_labels.shape[0], flow_labels.shape[1], 1).cuda()
         approx21, delta_log_p2 = flownet(flow_labels, feature, delta_p)
@@ -294,6 +288,9 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
         else:   
             L = loss_nll #+ loss_ce
 
+
+        optimizer.zero_grad()
+        optimizerFlow.zero_grad()
         L.backward()
 
         if args.fix == 'flow':
@@ -372,7 +369,6 @@ def test(epoch,net,flowNet):
     test_log.flush()  
     return acc
 
-
 # KL divergence
 def kl_divergence(p, q):
     return (p * ((p+1e-10) / (q+1e-10)).log()).sum(dim=1)
@@ -415,24 +411,6 @@ def Calculate_JSD(net, flowNet, num_samples):
         with torch.no_grad():
             feature = net(inputs)[0]
             out = flowTrainer.predict(flowNet, feature)
-
-        ## Divergence clculator to record the diff. between ground truth and output prob. dist.  
-        dist = Dist_Func(out, targets)
-        JSD[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = dist
-
-    return JSD
-
-## Calculate JSD
-def Calculate_JSD_onenet(model, num_samples):  
-    JSD   = torch.zeros(num_samples)    
-
-    for batch_idx, (inputs, targets, index) in enumerate(eval_loader):
-        inputs, targets = inputs.cuda(), targets.cuda()
-        batch_size = inputs.size()[0]
-
-        ## Get outputs of both network
-        with torch.no_grad():
-            out = torch.nn.Softmax(dim=1).cuda()(model(inputs)[1])     
 
         ## Divergence clculator to record the diff. between ground truth and output prob. dist.  
         dist = Dist_Func(out, targets)
@@ -544,6 +522,21 @@ def create_model():
     model = ResNet18(num_classes=args.num_class)
     model = model.cuda()
     return model
+
+def mix_match(inputs, targets, alpha = 4):
+    # MixMatch
+    l = np.random.beta(alpha, alpha)        
+    l = max(l, 1-l)
+
+    idx = torch.randperm(inputs.size(0))
+
+    input_a, input_b   = inputs, inputs[idx]
+    target_a, target_b = targets, targets[idx]
+    
+    ## Mixup
+    mixed_input  = l * input_a  + (1 - l) * input_b        
+    mixed_target = l * target_a + (1 - l) * target_b
+    return mixed_input, mixed_target
 
 ## Choose Warmup period based on Dataset
 num_samples = 50000
