@@ -20,11 +20,13 @@ from math import log2
 from Contrastive_loss import *
 import matplotlib.pyplot as plt
 
+import time
 import collections.abc
 from collections.abc import MutableMapping
 from flow_trainer import FlowTrainer
 from flowModule.utils import standard_normal_logprob
 from tqdm import tqdm
+
 try:
     import wandb
 except ImportError:
@@ -56,7 +58,7 @@ parser.add_argument('--tau', default=2.5, type=float, help='filtering coefficien
 parser.add_argument('--metric', type=str, default = 'JSD', help='Comparison Metric')
 parser.add_argument('--seed', default=123)
 parser.add_argument('--gpuid', default=0, type=int)
-parser.add_argument('--resume', default=False, type=bool, help = 'Resume from the warmup checkpoint')
+parser.add_argument('--resume', action='store_true', help = 'Resume from the warmup checkpoint')
 parser.add_argument('--num_class', default=10, type=int)
 parser.add_argument('--data_path', default='./data/cifar10', type=str, help='path to dataset')
 parser.add_argument('--dataset', default='cifar10', type=str)
@@ -67,6 +69,7 @@ parser.add_argument('--ce', action='store_true')
 parser.add_argument('--fix', default='none', choices=['none', 'net', 'flow'], type=str)
 parser.add_argument('--predictPolicy', default='mean', choices=['mean', 'weight'], type=str)
 parser.add_argument('--pretrain', default='', type=str)
+parser.add_argument('--beta', default=0.1, type=float)
 args = parser.parse_args()
 
 ## GPU Setup 
@@ -136,8 +139,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             # Label co-guessing of unlabeled samples
             features_u11, _ = net(inputs_u)
             features_u12, _ = net(inputs_u2)
-                  
-            
+
             ## Pseudo-label
             pu = flowTrainer.get_pseudo_label(flownet, features_u11, features_u12)
             # flow_outputs_u11 = flowTrainer.predict(flownet, features_u11)
@@ -153,11 +155,11 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             features_x, _  = net(inputs_x)
             features_x2, _ = net(inputs_x2)            
             
-            px = flowTrainer.get_pseudo_label(flownet, features_x, features_x2)
+            px_o = flowTrainer.get_pseudo_label(flownet, features_x, features_x2)
             # flow_outputs_x = flowTrainer.predict(flownet, features_x)
             # flow_outputs_x2 = flowTrainer.predict(flownet, features_x2)
             # px = (flow_outputs_x + flow_outputs_x2) / 2   
-            px = w_x*labels_x + (1-w_x)*px
+            px = w_x*labels_x + (1-w_x)*px_o
 
             ptx = px**(1/args.T)    ## Temparature sharpening 
                         
@@ -167,8 +169,10 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             # print("targets_u : ", targets_u[:10])
             # targets_x = labels_x
 
+            # print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, batch_idx)
+
             # Calculate label sources
-            u_sources_pesudo = Dist_Func(targets_u, labels_u_o)
+            u_sources_pseudo = Dist_Func(targets_u, labels_u_o)
             x_sources_origin = Dist_Func(labels_x, labels_x_o)
             x_sources_refine = Dist_Func(targets_x, labels_x_o)
 
@@ -211,10 +215,32 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         log_p2 = (approx2 - delta_log_p2)
 
         lamb_x = linear_rampup(epoch, warm_up, args.linear_x, args.lambda_x) + 1
-        lamb_u = linear_rampup(epoch, warm_up, args.linear_u, args.lambda_u)
+        lamb_u = linear_rampup(epoch, warm_up, args.linear_u, args.lambda_u) + 1
 
-        loss_nll_x = -log_p2[:batch_size*2].mean()
-        loss_nll_u = -log_p2[batch_size*2:].mean()
+        
+        loss_nll_x = -log_p2[:batch_size*2]
+        loss_nll_u = -log_p2[batch_size*2:]
+
+        print("loss_nll_x : ", loss_nll_x[:10])
+        print("loss_nll_u : ", loss_nll_u[:10])
+        print("targets_x : ", targets_x[:10])
+        print("px_o : ", px_o[:10])
+        print("targets_u : ", targets_u[:10])
+        print("labels_x_o : ", labels_x_o[:10])
+        print("labels_u_o : ", labels_u_o[:10])
+    
+        print("loss_nll_x max:", loss_nll_x.max())
+        print("loss_nll_x min:", loss_nll_x.min())
+        print("loss_nll_x var:", loss_nll_x.var())
+        print("loss_nll_u max:", loss_nll_u.max())
+        print("loss_nll_u min:", loss_nll_u.min())
+        print("loss_nll_u var:", loss_nll_u.var())
+        loss_nll_x = loss_nll_x.mean()
+        loss_nll_u = loss_nll_u.mean()
+
+        print("loss_x : ", lamb_x * loss_nll_x)
+        print("loss_u : ", lamb_u * loss_nll_u)
+        print("loss_CLR: ", args.lambda_c * loss_simCLR )
         ## Total Loss
         loss = args.lambda_c * loss_simCLR + lamb_x * loss_nll_x + lamb_u * loss_nll_u #+ penalty
 
@@ -231,6 +257,10 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             optimizer.step()
             optimizerFlow.step()  
 
+        # model_name = 'Net_{}.pth'.format(batch_idx)
+        # model_name_flow = 'FlowNet_{}.pth'.format(batch_idx)
+        # save_model(net, flowNet, epoch, model_name, model_name_flow)
+
         ## wandb
         if (wandb != None):
             logMsg = {}
@@ -239,7 +269,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             logMsg["loss/nll_u"] = loss_nll_u.item()
             logMsg["loss/simCLR"] = loss_simCLR.item()
 
-            logMsg["label_quality/unlabel_pesudo_JSD_mean"] = u_sources_pesudo.mean().item()
+            logMsg["label_quality/unlabel_pseudo_JSD_mean"] = u_sources_pseudo.mean().item()
             logMsg["label_quality/label_origin_JSD_mean"] = x_sources_origin.mean().item()
             logMsg["label_quality/label_refine_JSD_mena"] = x_sources_refine.mean().item()
 
@@ -264,14 +294,14 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
         inputs, labels = inputs.cuda(), labels.cuda() 
         labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
 
-        mixed_input, mixed_target = mix_match(inputs, labels_one_hot, args.alpha_warmup)
-
-        feature, outputs = net(mixed_input)               
+        # mixed_input, mixed_target = mix_match(inputs, labels_one_hot, args.alpha_warmup)
+        
+        feature, outputs = net(inputs)               
         #loss_ce = CEloss(outputs, labels)    
 
         # == flow ==
         feature = F.normalize(feature, dim=1)
-        flow_labels = mixed_target.unsqueeze(1).cuda()
+        flow_labels = labels_one_hot.unsqueeze(1).cuda()
         
         delta_p = torch.zeros(flow_labels.shape[0], flow_labels.shape[1], 1).cuda()
         approx21, delta_log_p2 = flownet(flow_labels, feature, delta_p)
@@ -480,6 +510,7 @@ def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
     if (wandb != None):
         logMsg = {}
         logMsg["epoch"] = epoch
+        logMsg["JSD"] = wandb.Image(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
         logMsg["JSD/threshold"] = threshold
         logMsg["JSD/sample_ratio"] = sample_ratio
         logMsg["JSD/labeled_mean"] =  np.mean(labeled_prob)
@@ -523,6 +554,47 @@ def create_model():
     model = model.cuda()
     return model
 
+def add_noise(labels):
+    labels = labels + (labels==1.0).float() * torch.rand(*labels.shape).to(labels) * args.beta
+    labels = labels - (labels==0.0).float() * torch.rand(*labels.shape).to(labels) * args.beta
+    return labels
+
+def data2Tab(labels, values, name):
+    data = [[label, val] for (label, val) in zip(labels, values)]
+    table = wandb.Table(data=data, columns = ["label", "value"])
+    return wandb.plot.bar(table, "label", "value", title=name)
+
+def print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, batch_idx):
+    label = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+    refine_labels_x = [0]*10
+    target_labels_x = [0]*10
+
+    pseudo_labels_u = [0]*10
+    target_labels_u = [0]*10
+    for i in targets_u.max(dim=1).indices:
+        pseudo_labels_u[i.item()] += 1
+    for i in labels_u_o:
+        target_labels_u[i.item()] += 1
+
+    for i in targets_x.max(dim=1).indices:
+        refine_labels_x[i.item()] += 1
+    for i in labels_x_o:
+        target_labels_x[i.item()] += 1
+    print(f"\n=====epoch{epoch}======")
+    print("pseudo_labels_u : ", pseudo_labels_u)
+    print("target_labels_u : ", target_labels_u)
+    print("refine_labels_x : ", refine_labels_x)
+    print("target_labels_x : ", target_labels_x)
+
+    # if (wandb != None):
+    #     logMsg = {}
+    #     logMsg["epoch"] = epoch
+    #     logMsg["label_count/pseudo_labels_u"] =  data2Tab(label, pseudo_labels_u, "pseudo_labels_u")
+    #     logMsg["label_count/target_labels_u"] =  data2Tab(label, target_labels_u, "target_labels_u")
+    #     logMsg["label_count/refine_labels_x"] =  data2Tab(label, refine_labels_x, "refine_labels_x")
+    #     logMsg["label_count/target_labels_x"] =  data2Tab(label, target_labels_x, "target_labels_x")
+    #     wandb.log(logMsg)
+
 def mix_match(inputs, targets, alpha = 4):
     # MixMatch
     l = np.random.beta(alpha, alpha)        
@@ -537,6 +609,37 @@ def mix_match(inputs, targets, alpha = 4):
     mixed_input  = l * input_a  + (1 - l) * input_b        
     mixed_target = l * target_a + (1 - l) * target_b
     return mixed_input, mixed_target
+
+def save_model(net, flowNet, epoch, model_name, model_name_flow, acc = 0):
+    print("Save the Model-----")
+    checkpoint = {
+        'net': net.state_dict(),
+        'Model_number': 1,
+        'Noise_Ratio': args.r,
+        'Loss Function': 'CrossEntropyLoss',
+        'Optimizer': 'SGD',
+        'Noise_mode': args.noise_mode,
+        'Accuracy': acc,
+        'Pytorch version': '1.4.0',
+        'Dataset': 'TinyImageNet',
+        'Batch Size': args.batch_size,
+        'epoch': epoch,
+    }
+
+    checkpoint_flow = {
+        'net': flowNet.state_dict(),
+        'Model_number': 3,
+        'Noise_Ratio': args.r,
+        'Loss Function': 'log-likelihood',
+        'Optimizer': 'SGD',
+        'Noise_mode': args.noise_mode,
+        'Dataset': 'TinyImageNet',
+        'Batch Size': args.batch_size,
+        'epoch': epoch,
+    }
+
+    torch.save(checkpoint, os.path.join(model_save_loc, model_name))
+    torch.save(checkpoint_flow, os.path.join(model_save_loc, model_name_flow))
 
 ## Choose Warmup period based on Dataset
 num_samples = 50000
@@ -597,7 +700,8 @@ else:
 best_acc = 0
 
 ## Warmup and SSL-Training 
-for epoch in range(start_epoch,args.num_epochs+1):   
+for epoch in range(start_epoch,args.num_epochs+1):
+    startTime = time.time() 
     test_loader = loader.run(0, 'test')
     eval_loader = loader.run(0, 'eval_train')   
     warmup_trainloader = loader.run(0,'warmup')
@@ -610,6 +714,8 @@ for epoch in range(start_epoch,args.num_epochs+1):
         warmup_standard(epoch, net, flowNet, optimizer, optimizerFlow, warmup_trainloader)   
     
     else:
+        if epoch > 20:
+            args.predictPolicy == 'mean'
         ## Calculate JSD values and Filter Rate
         print("Calculate JSD")
         prob = Calculate_JSD(net, flowNet, num_samples)
@@ -624,6 +730,13 @@ for epoch in range(start_epoch,args.num_epochs+1):
     scheduler.step()
     schedulerFlow.step()
 
+    ## wandb
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["runtime"] = time.time() - startTime
+        wandb.log(logMsg)
+
     if acc > best_acc:
         if epoch <warm_up:
             model_name = 'Net_warmup.pth'
@@ -632,34 +745,6 @@ for epoch in range(start_epoch,args.num_epochs+1):
             model_name = 'Net.pth'
             model_name_flow = 'FlowNet.pth'
 
-        print("Save the Model-----")
-        checkpoint = {
-            'net': net.state_dict(),
-            'Model_number': 1,
-            'Noise_Ratio': args.r,
-            'Loss Function': 'CrossEntropyLoss',
-            'Optimizer': 'SGD',
-            'Noise_mode': args.noise_mode,
-            'Accuracy': acc,
-            'Pytorch version': '1.4.0',
-            'Dataset': 'TinyImageNet',
-            'Batch Size': args.batch_size,
-            'epoch': epoch,
-        }
-
-        checkpoint_flow = {
-            'net': flowNet.state_dict(),
-            'Model_number': 3,
-            'Noise_Ratio': args.r,
-            'Loss Function': 'log-likelihood',
-            'Optimizer': 'SGD',
-            'Noise_mode': args.noise_mode,
-            'Dataset': 'TinyImageNet',
-            'Batch Size': args.batch_size,
-            'epoch': epoch,
-        }
-
-        torch.save(checkpoint, os.path.join(model_save_loc, model_name))
-        torch.save(checkpoint_flow, os.path.join(model_save_loc, model_name_flow))
+        save_model(net, flowNet, epoch, model_name, model_name_flow, acc)
         best_acc = acc
 
