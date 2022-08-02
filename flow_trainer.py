@@ -90,7 +90,7 @@ class FlowTrainer:
         return -densitys
 
 
-    def predict(self, net, feature, mean = 0, std = 0, sample_n = 1):
+    def predict(self, net, feature, mean = 0, std = 0, sample_n = 1, origin=False):
         batch_size = feature.size()[0]
         feature = F.normalize(feature, dim=1)
         feature = feature.repeat(sample_n, 1, 1)
@@ -98,12 +98,13 @@ class FlowTrainer:
         delta_p = torch.zeros(input_z.shape[0], input_z.shape[1], 1).cuda()
         
         approx21, _ = net(input_z, feature, delta_p, reverse=True)
+        
         probs = torch.clamp(approx21, min=0, max=1)
-        probsSum = torch.sum(probs, 2).unsqueeze(1).expand(probs.size())
-        probs /= probsSum
-        probs = probs.detach().squeeze(1)
         probs = probs.view(sample_n, -1, self.args.num_class)
         probs_mean = torch.mean(probs, dim=0, keepdim=False)
+        probs_mean = F.normalize(probs_mean, dim=1, p=1)
+        if origin:
+            return approx21.detach().squeeze(1)
         return probs_mean
 
     def testByFlow(self, net, flownet, test_loader):
@@ -115,7 +116,10 @@ class FlowTrainer:
             for batch_idx, (inputs, targets) in enumerate(test_loader):
                 inputs, targets = inputs.cuda(), targets.cuda()
                 feature, _ = net(inputs)       
-                outputs = self.predict(flownet, feature)
+                outputs = self.predict(flownet, feature, origin=True)
+                # if (batch_idx == 1):
+                #     print("outputs", outputs[:10])
+                #     print("targets", targets[:10])
                 _, predicted = torch.max(outputs, 1)    
                 total += targets.size(0)
                 correct += predicted.eq(targets).cpu().sum().item()                    
