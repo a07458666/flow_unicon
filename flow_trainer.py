@@ -112,6 +112,7 @@ class FlowTrainer:
         flownet.eval()
         correct = 0
         total = 0
+        prob_sum = 0
         with torch.no_grad():
             for batch_idx, (inputs, targets) in enumerate(test_loader):
                 inputs, targets = inputs.cuda(), targets.cuda()
@@ -120,11 +121,17 @@ class FlowTrainer:
                 # if (batch_idx == 1):
                 #     print("outputs", outputs[:10])
                 #     print("targets", targets[:10])
-                _, predicted = torch.max(outputs, 1)    
+                prob, predicted = torch.max(outputs, 1)
+
                 total += targets.size(0)
-                correct += predicted.eq(targets).cpu().sum().item()                    
+                correct += predicted.eq(targets).cpu().sum().item()  
+                prob_sum += prob.cpu().sum().item()
+
         acc = 100.*correct/total
-        return acc
+        ## confidence score
+        confidence = prob_sum/total
+
+        return acc, confidence
 
     def torch_onehot(self, y, Nclass):
         if y.is_cuda:
