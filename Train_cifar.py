@@ -309,20 +309,24 @@ def test(epoch,net1,net2):
     correct = 0
     total = 0
     loss_x = 0
+    prob_sum = 0
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(test_loader):
             inputs, targets = inputs.cuda(), targets.cuda()
             _, outputs1 = net1(inputs)
             _, outputs2 = net2(inputs)           
             outputs = outputs1+outputs2
-            _, predicted = torch.max(outputs, 1)            
+            prob, predicted = torch.max(outputs, 1)            
             loss = CEloss(outputs, targets)  
             loss_x += loss.item()
 
             total += targets.size(0)
             correct += predicted.eq(targets).cpu().sum().item()  
+            prob_sum += prob.cpu().sum().item()
+
 
     acc = 100.*correct/total
+    confidence = prob_sum/total
     print("\n| Test Epoch #%d\t Accuracy: %.2f%%\n" %(epoch,acc))  
 
     ## wandb
@@ -330,6 +334,7 @@ def test(epoch,net1,net2):
         logMsg = {}
         logMsg["epoch"] = epoch
         logMsg["acc/test"] = acc
+        logMsg["confidence score"] = confidence
         wandb.log(logMsg)
 
     test_log.write(str(acc)+'\n')

@@ -50,7 +50,8 @@ parser.add_argument('--lambda_u', default=1, type=float, help='weight for unsupe
 parser.add_argument('--linear_x', default=30, type=float, help='weight for unsupervised loss')
 parser.add_argument('--lambda_x', default=1, type=float, help='weight for supervised loss')
 parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
-parser.add_argument('--T', default=0.5, type=float, help='sharpening temperature')
+parser.add_argument('--Tu', default=0.5, type=float, help='sharpening temperature')
+parser.add_argument('--Tx', default=0.5, type=float, help='sharpening temperature')
 parser.add_argument('--num_epochs', default=350, type=int)
 parser.add_argument('--r', default=0.5, type=float, help='noise ratio')
 parser.add_argument('--d_u',  default=0.47, type=float)
@@ -146,7 +147,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             # flow_outputs_u12 = flowTrainer.predict(flownet, features_u12)
 
             # pu = (flow_outputs_u11 + flow_outputs_u12) / 2
-            ptu = pu**(1/args.T)            ## Temparature Sharpening
+            ptu = pu**(1/args.Tu)            ## Temparature Sharpening
             
             targets_u = ptu / ptu.sum(dim=1, keepdim=True)
             targets_u = targets_u.detach()                  
@@ -161,7 +162,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             # px = (flow_outputs_x + flow_outputs_x2) / 2   
             px = w_x*labels_x + (1-w_x)*px_o
 
-            ptx = px**(1/args.T)    ## Temparature sharpening 
+            ptx = px**(1/args.Tx)    ## Temparature sharpening 
                         
             targets_x = ptx / ptx.sum(dim=1, keepdim=True)           
             targets_x = targets_x.detach()
@@ -185,11 +186,15 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
 
         loss_simCLR = contrastive_criterion(features)
 
-
+        
+            
         all_inputs  = torch.cat([inputs_x3, inputs_x4, inputs_u3, inputs_u4], dim=0)
         all_targets = torch.cat([targets_x, targets_x, targets_u, targets_u], dim=0)
 
-        mixed_input, mixed_target = mix_match(all_inputs, all_targets, args.alpha)
+        if epoch < 20: # warmup not mixup
+            mixed_input, mixed_target = all_inputs, all_targets
+        else:
+            mixed_input, mixed_target = mix_match(all_inputs, all_targets, args.alpha)
                 
         flow_feature, logits = net(mixed_input) # add flow_feature
         # logits_x = logits[:batch_size*2]
@@ -199,10 +204,10 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         # Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
         
         ## Regularization
-        prior = torch.ones(args.num_class)/args.num_class
-        prior = prior.cuda()        
-        pred_mean = torch.softmax(logits, dim=1).mean(0)
-        penalty = torch.sum(prior*torch.log(prior/pred_mean))
+        # prior = torch.ones(args.num_class)/args.num_class
+        # prior = prior.cuda()        
+        # pred_mean = torch.softmax(logits, dim=1).mean(0)
+        # penalty = torch.sum(prior*torch.log(prior/pred_mean))
 
         ## Flow loss
         flow_feature = F.normalize(flow_feature, dim=1)
@@ -214,35 +219,28 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         delta_log_p2 = delta_log_p2.view(flow_mixed_target.size()[0], flow_mixed_target.shape[1], 1).sum(1)
         log_p2 = (approx2 - delta_log_p2)
 
-        lamb_x = linear_rampup(epoch, warm_up, args.linear_x, args.lambda_x) + 1
-        lamb_u = linear_rampup(epoch, warm_up, args.linear_u, args.lambda_u) + 1
+        # lamb_x = linear_rampup(epoch, warm_up, args.linear_x, args.lambda_x) + 1
+        lamb_u = linear_rampup(epoch, warm_up, args.linear_u, args.lambda_u)
 
         
         loss_nll_x = -log_p2[:batch_size*2]
         loss_nll_u = -log_p2[batch_size*2:]
 
-        print("loss_nll_x : ", loss_nll_x[:10])
-        print("loss_nll_u : ", loss_nll_u[:10])
-        print("targets_x : ", targets_x[:10])
-        print("px_o : ", px_o[:10])
-        print("targets_u : ", targets_u[:10])
-        print("labels_x_o : ", labels_x_o[:10])
-        print("labels_u_o : ", labels_u_o[:10])
-    
-        print("loss_nll_x max:", loss_nll_x.max())
-        print("loss_nll_x min:", loss_nll_x.min())
-        print("loss_nll_x var:", loss_nll_x.var())
-        print("loss_nll_u max:", loss_nll_u.max())
-        print("loss_nll_u min:", loss_nll_u.min())
-        print("loss_nll_u var:", loss_nll_u.var())
-        loss_nll_x = loss_nll_x.mean()
-        loss_nll_u = loss_nll_u.mean()
+        # mixup_x = mixed_target[:batch_size*2]
+        # mixup_u = mixed_target[batch_size*2:]
+        # print("mixed_target_x : ", mixup_x[:10])
+        # print("mixed_target_u : ", mixup_u[:10])
+        # print("loss_nll_x : ", loss_nll_x[:10])
+        # print("loss_nll_u : ", loss_nll_u[:10])
+        # print("targets_x : ", targets_x[:10])
+        # print("px_o : ", px_o[:10])
+        # print("targets_u : ", targets_u[:10])
+        # print("labels_x_o : ", labels_x_o[:10])
+        # print("labels_u_o : ", labels_u_o[:10])
 
-        print("loss_x : ", lamb_x * loss_nll_x)
-        print("loss_u : ", lamb_u * loss_nll_u)
-        print("loss_CLR: ", args.lambda_c * loss_simCLR )
+        # print("loss_CLR: ", args.lambda_c * loss_simCLR )
         ## Total Loss
-        loss = args.lambda_c * loss_simCLR + lamb_x * loss_nll_x + lamb_u * loss_nll_u #+ penalty
+        loss = args.lambda_c * loss_simCLR + loss_nll_x.mean() + lamb_u * loss_nll_u.mean() #+ penalty
 
         # Compute gradient and Do SGD step
         optimizer.zero_grad()
@@ -265,8 +263,16 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         if (wandb != None):
             logMsg = {}
             logMsg["epoch"] = epoch
-            logMsg["loss/nll_x"] = loss_nll_x.item()
-            logMsg["loss/nll_u"] = loss_nll_u.item()
+            logMsg["loss/nll_x"] = loss_nll_x.mean().item()
+            logMsg["loss/nll_u"] = loss_nll_u.mean().item()
+
+            logMsg["loss/nll_x_max"] = loss_nll_x.max()
+            logMsg["loss/nll_x_min"] = loss_nll_x.min()
+            logMsg["loss/nll_x_var"] = loss_nll_x.var()
+            logMsg["loss/nll_u_max"] = loss_nll_u.max()
+            logMsg["loss/nll_u_min"] = loss_nll_u.min()
+            logMsg["loss/nll_u_var"] = loss_nll_u.var()
+
             logMsg["loss/simCLR"] = loss_simCLR.item()
 
             logMsg["label_quality/unlabel_pseudo_JSD_mean"] = u_sources_pseudo.mean().item()
@@ -277,7 +283,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
 
         sys.stdout.write('\r')
         sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Contrastive Loss:%.4f NLL(x) loss: %.2f NLL(u) loss: %.2f'
-                %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_simCLR.item(),  loss_nll_x.item(), loss_nll_u.item()))
+                %(args.dataset, args.r, args.noise_mode, epoch, args.num_epochs, batch_idx+1, num_iter, loss_simCLR.item(),  loss_nll_x.mean().item(), loss_nll_u.mean().item()))
         sys.stdout.flush()
 
 
@@ -336,6 +342,9 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
             logMsg = {}
             logMsg["epoch"] = epoch
             logMsg["loss/nll"] = loss_nll.item()
+            logMsg["loss/nll_max"] = -log_p2.max()
+            logMsg["loss/nll_min"] = -log_p2.min()
+            logMsg["loss/nll_var"] = -log_p2.var()
             wandb.log(logMsg)
 
         sys.stdout.write('\r')
@@ -385,7 +394,7 @@ def warmup_val(epoch,net,optimizer, optimizerFlow,dataloader):
 
 ## Test Accuracy
 def test(epoch,net,flowNet):
-    acc = flowTrainer.testByFlow(net, flowNet, test_loader)
+    acc, confidence = flowTrainer.testByFlow(net, flowNet, test_loader)
     print("\n| Test Epoch #%d\t Accuracy: %.2f%%\n" %(epoch,acc))  
     
     ## wandb
@@ -397,7 +406,7 @@ def test(epoch,net,flowNet):
     
     test_log.write(str(acc)+'\n')
     test_log.flush()  
-    return acc
+    return acc, confidence
 
 # KL divergence
 def kl_divergence(p, q):
@@ -432,7 +441,6 @@ def Dist_Func(pred, target):
 ## Calculate JSD
 def Calculate_JSD(net, flowNet, num_samples):  
     JSD   = torch.zeros(num_samples)    
-
     for batch_idx, (inputs, targets, index) in tqdm(enumerate(eval_loader)):
         inputs, targets = inputs.cuda(), targets.cuda()
         batch_size = inputs.size()[0]
@@ -714,8 +722,6 @@ for epoch in range(start_epoch,args.num_epochs+1):
         warmup_standard(epoch, net, flowNet, optimizer, optimizerFlow, warmup_trainloader)   
     
     else:
-        if epoch > 20:
-            args.predictPolicy == 'mean'
         ## Calculate JSD values and Filter Rate
         print("Calculate JSD")
         prob = Calculate_JSD(net, flowNet, num_samples)
@@ -726,7 +732,7 @@ for epoch in range(start_epoch,args.num_epochs+1):
         logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
         train(epoch, net, flowNet,optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
 
-    acc = test(epoch,net, flowNet)
+    acc, confidence = test(epoch,net, flowNet)
     scheduler.step()
     schedulerFlow.step()
 
@@ -735,6 +741,7 @@ for epoch in range(start_epoch,args.num_epochs+1):
         logMsg = {}
         logMsg["epoch"] = epoch
         logMsg["runtime"] = time.time() - startTime
+        logMsg["confidence score"] = confidence
         wandb.log(logMsg)
 
     if acc > best_acc:
