@@ -317,7 +317,7 @@ def test(epoch,net1,net2):
             _, outputs1 = net1(inputs)
             _, outputs2 = net2(inputs)           
             outputs = outputs1+outputs2
-            torch.nn.Softmax(dim=1).cuda()(outputs)     
+            outputs = torch.nn.Softmax(dim=1).cuda()(outputs)     
             prob, predicted = torch.max(outputs, 1)            
             loss = CEloss(outputs, targets)  
             loss_x += loss.item()
