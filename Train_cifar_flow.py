@@ -73,7 +73,7 @@ parser.add_argument('--pretrain', default='', type=str)
 parser.add_argument('--beta', default=0.1, type=float)
 args = parser.parse_args()
 
-## GPU Setup 
+## GPU Setup
 torch.cuda.set_device(args.gpuid)
 random.seed(args.seed)
 torch.manual_seed(args.seed)
@@ -170,12 +170,16 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             # print("targets_u : ", targets_u[:10])
             # targets_x = labels_x
 
-            # print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, batch_idx)
+            print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, batch_idx)
 
+            logFeature(torch.cat([features_u11, features_u12, features_x, features_x2], dim=0))
             # Calculate label sources
             u_sources_pseudo = Dist_Func(targets_u, labels_u_o)
             x_sources_origin = Dist_Func(labels_x, labels_x_o)
             x_sources_refine = Dist_Func(targets_x, labels_x_o)
+            # print("x_sources_origin :", x_sources_origin)
+            # print("labels_x :", labels_x[:20])
+            # print("labels_x_o :", labels_x_o[:20])
 
         ## Unsupervised Contrastive Loss
         f1, _ = net(inputs_u3)
@@ -186,17 +190,17 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
 
         loss_simCLR = contrastive_criterion(features)
 
-        
-            
+
         all_inputs  = torch.cat([inputs_x3, inputs_x4, inputs_u3, inputs_u4], dim=0)
         all_targets = torch.cat([targets_x, targets_x, targets_u, targets_u], dim=0)
 
-        if epoch < 20: # warmup not mixup
-            mixed_input, mixed_target = all_inputs, all_targets
-        else:
-            mixed_input, mixed_target = mix_match(all_inputs, all_targets, args.alpha)
+        mixed_input, mixed_target = mix_match(all_inputs, all_targets, args.alpha)
                 
         flow_feature, logits = net(mixed_input) # add flow_feature
+
+        # Regularization feature var
+        reg_f_var_loss = -flow_feature.var(dim=0).mean()
+        
         # logits_x = logits[:batch_size*2]
         # logits_u = logits[batch_size*2:]        
         
@@ -210,7 +214,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         # penalty = torch.sum(prior*torch.log(prior/pred_mean))
 
         ## Flow loss
-        flow_feature = F.normalize(flow_feature, dim=1)
+        # flow_feature = F.normalize(flow_feature, dim=1)
         flow_mixed_target = mixed_target.unsqueeze(1).cuda()
         delta_p = torch.zeros(flow_mixed_target.shape[0], flow_mixed_target.shape[1], 1).cuda() 
         approx21, delta_log_p2 = flownet(flow_mixed_target, flow_feature, delta_p)
@@ -240,7 +244,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
 
         # print("loss_CLR: ", args.lambda_c * loss_simCLR )
         ## Total Loss
-        loss = args.lambda_c * loss_simCLR + loss_nll_x.mean() + lamb_u * loss_nll_u.mean() #+ penalty
+        loss = args.lambda_c * loss_simCLR + loss_nll_x.mean() + lamb_u * loss_nll_u.mean() + reg_f_var_loss #+ penalty
 
         # Compute gradient and Do SGD step
         optimizer.zero_grad()
@@ -300,15 +304,18 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
         inputs, labels = inputs.cuda(), labels.cuda() 
         labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
 
-        # mixed_input, mixed_target = mix_match(inputs, labels_one_hot, args.alpha_warmup)
-        
-        feature, outputs = net(inputs)               
+        mixed_input, mixed_target = mix_match(inputs, labels_one_hot, args.alpha_warmup)
+        feature, outputs = net(mixed_input)   
+        logFeature(feature)            
         #loss_ce = CEloss(outputs, labels)    
 
         # == flow ==
-        feature = F.normalize(feature, dim=1)
-        flow_labels = labels_one_hot.unsqueeze(1).cuda()
+        # feature = F.normalize(feature, dim=1)
+        flow_labels = mixed_target.unsqueeze(1).cuda()
         
+        #
+        # flow_labels = add_noise(flow_labels, epoch)
+
         delta_p = torch.zeros(flow_labels.shape[0], flow_labels.shape[1], 1).cuda()
         approx21, delta_log_p2 = flownet(flow_labels, feature, delta_p)
         
@@ -427,7 +434,7 @@ def Selection_Rate(prob):
         threshold = threshold - (threshold-torch.min(prob))/args.tau
     SR = torch.sum(prob<threshold).item()/num_samples
 
-    if SR <= 0 or SR >= 1.0:
+    if SR <= 1/args.num_class or SR >= 1.0:
         new_SR = np.clip(SR, 1/args.num_class, 0.9)
         print(f'WARNING: sample rate = {SR}, set to {new_SR}')
         SR = new_SR
@@ -562,10 +569,26 @@ def create_model():
     model = model.cuda()
     return model
 
-def add_noise(labels):
-    labels = labels + (labels==1.0).float() * torch.rand(*labels.shape).to(labels) * args.beta
-    labels = labels - (labels==0.0).float() * torch.rand(*labels.shape).to(labels) * args.beta
+def add_noise(labels, epoch):
+    # labels = labels + (labels==1.0).float() * torch.rand(*labels.shape).to(labels) * args.beta
+    # labels = labels - (labels==0.0).float() * torch.rand(*labels.shape).to(labels) * args.beta
+    limit = linear_rampup(epoch + 1, 0, 10, 1)
+    print("limit : ", limit)
+    labels = labels * limit
     return labels
+
+def logFeature(feature):
+    ## wandb
+    if (wandb != None):
+        logMsg = {}
+        logMsg["Feature/max"] = feature.max()
+        logMsg["Feature/min"] = feature.min()
+        logMsg["Feature/mean"] = feature.mean()
+        logMsg["Feature/var"] = feature.var()
+        logMsg["Feature/var_dim"] = feature.var(dim=0).mean()
+        wandb.log(logMsg)
+    return
+
 
 def data2Tab(labels, values, name):
     data = [[label, val] for (label, val) in zip(labels, values)]
@@ -674,7 +697,8 @@ criterion  = SemiLoss()
 
 ## Optimizer and Scheduler
 optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4) 
-optimizerFlow = optim.SGD(flowNet.parameters(), lr=args.lr_f, momentum=0.9, weight_decay=5e-4) 
+# optimizerFlow = optim.SGD(flowNet.parameters(), lr=args.lr_f, momentum=0.9, weight_decay=5e-4)
+optimizerFlow = optim.AdamW(flowNet.parameters(), lr=args.lr_f)
 
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epochs, args.lr / 100)
 schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, args.num_epochs, args.lr_f / 100)
@@ -754,4 +778,8 @@ for epoch in range(start_epoch,args.num_epochs+1):
 
         save_model(net, flowNet, epoch, model_name, model_name_flow, acc)
         best_acc = acc
+
+    model_name = 'Net_{}.pth'.format(epoch)
+    model_name_flow = 'FlowNet_{}.pth'.format(epoch)
+    save_model(net, flowNet, epoch, model_name, model_name_flow, acc)
 

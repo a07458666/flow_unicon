@@ -336,7 +336,7 @@ class cifar_dataloader():
             unlabeled_trainloader = DataLoader(
                 dataset=unlabeled_dataset, 
                 # batch_size= int(self.batch_size/(2*sample_ratio)),
-                batch_size= int(self.batch_size/(2 * (1 - sample_ratio))),
+                batch_size= int(self.batch_size * (2 * (1 - sample_ratio))),
                 shuffle=True,
                 num_workers=self.num_workers, drop_last =True)    
 
