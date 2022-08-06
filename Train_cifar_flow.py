@@ -199,7 +199,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         flow_feature, logits = net(mixed_input) # add flow_feature
 
         # Regularization feature var
-        reg_f_var_loss = -flow_feature.var(dim=0).mean()
+        reg_f_var_loss = torch.clamp(1-torch.sqrt(flow_feature.var(dim=0) + 1e-10), min=0).mean()
         
         # logits_x = logits[:batch_size*2]
         # logits_u = logits[batch_size*2:]        
@@ -304,10 +304,12 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
         inputs, labels = inputs.cuda(), labels.cuda() 
         labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
 
-        mixed_input, mixed_target = mix_match(inputs, labels_one_hot, args.alpha_warmup)
-        feature, outputs = net(mixed_input)   
+        
+        # mixed_input, mixed_target = mix_match(inputs, labels_one_hot, args.alpha_warmup)
+        feature, outputs = net(inputs)
+        mixed_target = distillation_label(labels_one_hot, outputs)
         logFeature(feature)            
-        #loss_ce = CEloss(outputs, labels)    
+        loss_ce = CEloss(outputs, labels)    
 
         # == flow ==
         # feature = F.normalize(feature, dim=1)
@@ -329,7 +331,7 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
             penalty = conf_penalty(outputs)
             L = loss_nll + penalty #+ loss_ce   
         else:   
-            L = loss_nll #+ loss_ce
+            L = loss_nll + loss_ce
 
 
         optimizer.zero_grad()
@@ -576,6 +578,14 @@ def add_noise(labels, epoch):
     print("limit : ", limit)
     labels = labels * limit
     return labels
+
+def distillation_label(labels, pseudo, alpha = 0.2):
+    with torch.no_grad():
+        l = np.random.beta(alpha, alpha)        
+        l = max(l, 1-l)
+        new_label = (l * labels) + ((1 - l) * pseudo.detach())
+        return new_label.detach()
+
 
 def logFeature(feature):
     ## wandb
