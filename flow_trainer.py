@@ -73,12 +73,12 @@ class FlowTrainer:
                 delta_p2 = torch.zeros(input_z2.shape[0], input_z2.shape[1], 1).cuda()
                 cond1, _ = encoder1(inputs)
                 cond2, _ = encoder2(inputs)
-                # feature1 = F.normalize(cond1, dim=1)
-                # feature2 = F.normalize(cond2, dim=1)
+                feature1 = F.normalize(cond1, dim=1)
+                feature2 = F.normalize(cond2, dim=1)
                 labels_one_hot = torch.nn.functional.one_hot(targets, self.args.num_class).type(torch.cuda.FloatTensor)
                 flow_labels = labels_one_hot.unsqueeze(1).cuda()
-                approx21_1, _ = model1(flow_labels, cond1, delta_p1)
-                approx21_2, _ = model2(flow_labels, cond2, delta_p2)
+                approx21_1, _ = model1(flow_labels, feature1, delta_p1)
+                approx21_2, _ = model2(flow_labels, feature2, delta_p2)
                 approx2_1 = standard_normal_logprob(approx21_1).view(flow_labels.size()[0], -1).sum(1, keepdim=True)
                 approx2_2 = standard_normal_logprob(approx21_2).view(flow_labels.size()[0], -1).sum(1, keepdim=True)
                 
@@ -92,7 +92,7 @@ class FlowTrainer:
 
     def predict(self, net, feature, mean = 0, std = 0, sample_n = 1, origin=False):
         batch_size = feature.size()[0]
-        # feature = F.normalize(feature, dim=1)
+        feature = F.normalize(feature, dim=1)
         feature = feature.repeat(sample_n, 1, 1)
         input_z = torch.normal(mean = mean, std = std, size=(sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
         delta_p = torch.zeros(input_z.shape[0], input_z.shape[1], 1).cuda()

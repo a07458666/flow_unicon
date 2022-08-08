@@ -93,6 +93,7 @@ model_save_loc = './checkpoint/' + folder
 if not os.path.exists(model_save_loc):
     os.mkdir(model_save_loc)
     os.mkdir(model_save_loc + '/JSD_distribution')
+    os.mkdir(model_save_loc + '/NLL_distribution')
 
 ## Log files
 stats_log=open(model_save_loc +'/%s_%.1f_%s'%(args.dataset,args.r,args.noise_mode)+'_stats.txt','w') 
@@ -100,6 +101,7 @@ test_log=open(model_save_loc +'/%s_%.1f_%s'%(args.dataset,args.r,args.noise_mode
 test_loss_log = open(model_save_loc +'/test_loss.txt','w')
 train_acc = open(model_save_loc +'/train_acc.txt','w')
 train_loss = open(model_save_loc +'/train_loss.txt','w')
+label_count = open(model_save_loc +'/label_count.txt','w')
 
 ## wandb
 if (wandb != None):
@@ -138,11 +140,12 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
 
         with torch.no_grad():
             # Label co-guessing of unlabeled samples
-            features_u11, _ = net(inputs_u)
-            features_u12, _ = net(inputs_u2)
+            features_u11, outputs_u11 = net(inputs_u)
+            features_u12, outputs_u12 = net(inputs_u2)
 
             ## Pseudo-label
-            pu = flowTrainer.get_pseudo_label(flownet, features_u11, features_u12)
+            # pu = flowTrainer.get_pseudo_label(flownet, features_u11, features_u12)
+            pu = (outputs_u11 + outputs_u12) / 2
             # flow_outputs_u11 = flowTrainer.predict(flownet, features_u11)
             # flow_outputs_u12 = flowTrainer.predict(flownet, features_u12)
 
@@ -201,11 +204,11 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         # Regularization feature var
         reg_f_var_loss = torch.clamp(1-torch.sqrt(flow_feature.var(dim=0) + 1e-10), min=0).mean()
         
-        # logits_x = logits[:batch_size*2]
-        # logits_u = logits[batch_size*2:]        
+        logits_x = logits[:batch_size*2]
+        logits_u = logits[batch_size*2:]        
         
         ## Combined Loss
-        # Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
+        Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
         
         ## Regularization
         # prior = torch.ones(args.num_class)/args.num_class
@@ -214,7 +217,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         # penalty = torch.sum(prior*torch.log(prior/pred_mean))
 
         ## Flow loss
-        # flow_feature = F.normalize(flow_feature, dim=1)
+        flow_feature = F.normalize(flow_feature, dim=1)
         flow_mixed_target = mixed_target.unsqueeze(1).cuda()
         delta_p = torch.zeros(flow_mixed_target.shape[0], flow_mixed_target.shape[1], 1).cuda() 
         approx21, delta_log_p2 = flownet(flow_mixed_target, flow_feature, delta_p)
@@ -244,7 +247,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
 
         # print("loss_CLR: ", args.lambda_c * loss_simCLR )
         ## Total Loss
-        loss = args.lambda_c * loss_simCLR + loss_nll_x.mean() + lamb_u * loss_nll_u.mean() + reg_f_var_loss #+ penalty
+        loss = Lx + lamb * Lu + args.lambda_c * loss_simCLR + loss_nll_x.mean() + lamb_u * loss_nll_u.mean() + reg_f_var_loss #+ penalty
 
         # Compute gradient and Do SGD step
         optimizer.zero_grad()
@@ -304,16 +307,15 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
         inputs, labels = inputs.cuda(), labels.cuda() 
         labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
 
-        
         # mixed_input, mixed_target = mix_match(inputs, labels_one_hot, args.alpha_warmup)
         feature, outputs = net(inputs)
-        mixed_target = distillation_label(labels_one_hot, outputs)
+        # mixed_target = distillation_label(labels_one_hot, outputs)
         logFeature(feature)            
         loss_ce = CEloss(outputs, labels)    
 
         # == flow ==
-        # feature = F.normalize(feature, dim=1)
-        flow_labels = mixed_target.unsqueeze(1).cuda()
+        feature = F.normalize(feature, dim=1)
+        flow_labels = labels_one_hot.unsqueeze(1).cuda()
         
         #
         # flow_labels = add_noise(flow_labels, epoch)
@@ -524,10 +526,22 @@ def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
     plt.grid(True)
     plt.savefig(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
 
+    # plt.clf()
+    # kwargs = dict(histtype='stepfilled', alpha=0.75, density=False, bins=20)
+    # plt.hist(clean_prob, color='green', range=(0., 1.), label='clean', **kwargs)
+    # plt.hist(noise_prob, color='red'  , range=(0., 1.), label='noisy', **kwargs)
+
+    # plt.xlabel('NLL Values')
+    # plt.ylabel('count')
+    # plt.title(f'NLL Distribution of N Samples epoch :{epoch}')
+    # plt.grid(True)
+    # plt.savefig(f'{model_save_loc}/NLL_distribution/epoch{epoch}.png')
+
     if (wandb != None):
         logMsg = {}
         logMsg["epoch"] = epoch
         logMsg["JSD"] = wandb.Image(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
+        # logMsg["NLL"] = wandb.Image(f'{model_save_loc}/NLL_distribution/epoch{epoch}.png')
         logMsg["JSD/threshold"] = threshold
         logMsg["JSD/sample_ratio"] = sample_ratio
         logMsg["JSD/labeled_mean"] =  np.mean(labeled_prob)
@@ -621,20 +635,26 @@ def print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, batch_idx):
         refine_labels_x[i.item()] += 1
     for i in labels_x_o:
         target_labels_x[i.item()] += 1
-    print(f"\n=====epoch{epoch}======")
-    print("pseudo_labels_u : ", pseudo_labels_u)
-    print("target_labels_u : ", target_labels_u)
-    print("refine_labels_x : ", refine_labels_x)
-    print("target_labels_x : ", target_labels_x)
+    label_count.write('\nepoch : ' + str(epoch))
+    label_count.write('\npseudo_labels_u : ' + str(pseudo_labels_u))
+    label_count.write('\ntarget_labels_u : ' + str(target_labels_u))
+    label_count.write('\nrefine_labels_x : ' + str(refine_labels_x))
+    label_count.write('\ntarget_labels_x : ' + str(target_labels_x))
+    label_count.flush()
+    # print(f"\n=====epoch{epoch}======")
+    # print("pseudo_labels_u : ", pseudo_labels_u)
+    # print("target_labels_u : ", target_labels_u)
+    # print("refine_labels_x : ", refine_labels_x)
+    # print("target_labels_x : ", target_labels_x)
 
-    # if (wandb != None):
-    #     logMsg = {}
-    #     logMsg["epoch"] = epoch
-    #     logMsg["label_count/pseudo_labels_u"] =  data2Tab(label, pseudo_labels_u, "pseudo_labels_u")
-    #     logMsg["label_count/target_labels_u"] =  data2Tab(label, target_labels_u, "target_labels_u")
-    #     logMsg["label_count/refine_labels_x"] =  data2Tab(label, refine_labels_x, "refine_labels_x")
-    #     logMsg["label_count/target_labels_x"] =  data2Tab(label, target_labels_x, "target_labels_x")
-    #     wandb.log(logMsg)
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["label_count/pseudo_labels_u"] =  max(pseudo_labels_u)
+        logMsg["label_count/target_labels_u"] =  max(target_labels_u)
+        logMsg["label_count/refine_labels_x"] =  max(refine_labels_x)
+        logMsg["label_count/target_labels_x"] =  max(target_labels_x)
+        wandb.log(logMsg)
 
 def mix_match(inputs, targets, alpha = 4):
     # MixMatch
@@ -707,8 +727,8 @@ criterion  = SemiLoss()
 
 ## Optimizer and Scheduler
 optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4) 
-# optimizerFlow = optim.SGD(flowNet.parameters(), lr=args.lr_f, momentum=0.9, weight_decay=5e-4)
-optimizerFlow = optim.AdamW(flowNet.parameters(), lr=args.lr_f)
+optimizerFlow = optim.SGD(flowNet.parameters(), lr=args.lr_f, momentum=0.9, weight_decay=5e-4)
+# optimizerFlow = optim.AdamW(flowNet.parameters(), lr=args.lr_f)
 
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epochs, args.lr / 100)
 schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, args.num_epochs, args.lr_f / 100)
