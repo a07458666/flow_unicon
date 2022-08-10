@@ -45,7 +45,7 @@ parser.add_argument('--tau', default=5, type=float, help='filtering coefficient'
 parser.add_argument('--metric', type=str, default = 'JSD', help='Comparison Metric')
 parser.add_argument('--seed', default=123)
 parser.add_argument('--gpuid', default=0, type=int)
-parser.add_argument('--resume', default=False, type=bool, help = 'Resume from the warmup checkpoint')
+parser.add_argument('--resume', action='store_true', help = 'Resume from the warmup checkpoint')
 parser.add_argument('--num_class', default=10, type=int)
 parser.add_argument('--data_path', default='./data/cifar10', type=str, help='path to dataset')
 parser.add_argument('--dataset', default='cifar10', type=str)
@@ -79,6 +79,8 @@ test_log=open(model_save_loc +'/%s_%.1f_%s'%(args.dataset,args.r,args.noise_mode
 test_loss_log = open(model_save_loc +'/test_loss.txt','w')
 train_acc = open(model_save_loc +'/train_acc.txt','w')
 train_loss = open(model_save_loc +'/train_loss.txt','w')
+label_count = open(model_save_loc +'/label_count.txt','w')
+
 
 ## wandb
 if (wandb != None):
@@ -129,7 +131,8 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
             _, outputs_u22 = net2(inputs_u2)            
             
             ## Pseudo-label
-            pu = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1) + torch.softmax(outputs_u21, dim=1) + torch.softmax(outputs_u22, dim=1)) / 4       
+            # pu = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1) + torch.softmax(outputs_u21, dim=1) + torch.softmax(outputs_u22, dim=1)) / 4       
+            pu = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1)) / 2
 
             ptu = pu**(1/args.T)            ## Temparature Sharpening
             
@@ -148,6 +151,11 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
             targets_x = ptx / ptx.sum(dim=1, keepdim=True)           
             targets_x = targets_x.detach()
 
+            targets_u_1 = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1)) / 2
+            targets_u_2 = (torch.softmax(outputs_u21, dim=1) + torch.softmax(outputs_u22, dim=1)) / 2
+            print_label_status(targets_u_1, targets_u_2, labels_u_o)
+
+            # print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, batch_idx)
             
             u_sources_pesudo = Dist_Func(targets_u, labels_u_o)
             x_sources_origin = Dist_Func(labels_x, labels_x_o)
@@ -191,7 +199,7 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
         penalty = torch.sum(prior*torch.log(prior/pred_mean))
 
         ## Total Loss
-        loss = Lx + lamb * Lu + args.lambda_c*loss_simCLR + penalty
+        loss = Lx + lamb * Lu + args.lambda_c*loss_simCLR #+ penalty
 
         ## Accumulate Loss
         loss_x += Lx.item()
@@ -463,6 +471,31 @@ def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
         logMsg["JSD_selection/noise_recall"] = noise_recall
         logMsg["JSD_selection/noise_precision"] = noise_precision
         logMsg["JSD_selection/noise_f1"] = noise_f1
+        wandb.log(logMsg)
+
+def print_label_status(targets_u_1, targets_u_2, labels_u_o):
+    label = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+    pseudo_labels_u_1 = [0]*10
+    pseudo_labels_u_2 = [0]*10
+    target_labels_u = [0]*10
+    for i in targets_u_1.max(dim=1).indices:
+        pseudo_labels_u_1[i.item()] += 1
+    for i in targets_u_2.max(dim=1).indices:
+        pseudo_labels_u_2[i.item()] += 1
+    for i in labels_u_o:
+        target_labels_u[i.item()] += 1
+    label_count.write('\n epoch : ' + str(epoch))
+    label_count.write('\n pseudo_labels_u_1 : ' + str(pseudo_labels_u_1))
+    label_count.write('\n pseudo_labels_u_2 : ' + str(pseudo_labels_u_2))
+    label_count.write('\n target_labels_u : ' + str(target_labels_u))
+    label_count.flush()
+
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["label_count/pseudo_labels_net_1"] =  max(pseudo_labels_u_1)
+        logMsg["label_count/refine_labels_net_2"] =  max(pseudo_labels_u_2)
+        logMsg["label_count/target_labels_x"] =  max(target_labels_u)
         wandb.log(logMsg)
 
 ## Unsupervised Loss coefficient adjustment 
