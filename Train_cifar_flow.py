@@ -45,8 +45,8 @@ parser.add_argument('--lr_f', '--flow_learning_rate', default=2e-5, type=float, 
 parser.add_argument('--noise_mode',  default='sym')
 parser.add_argument('--alpha_warmup', default=0.2, type=float, help='parameter for Beta (warmup)')
 parser.add_argument('--alpha', default=4, type=float, help='parameter for Beta')
-parser.add_argument('--linear_u', default=30, type=float, help='weight for unsupervised loss')
-parser.add_argument('--lambda_u', default=1, type=float, help='weight for unsupervised loss')
+parser.add_argument('--linear_u', default=340, type=float, help='weight for unsupervised loss')
+parser.add_argument('--lambda_u', default=3, type=float, help='weight for unsupervised loss')
 parser.add_argument('--linear_x', default=30, type=float, help='weight for unsupervised loss')
 parser.add_argument('--lambda_x', default=1, type=float, help='weight for supervised loss')
 parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
@@ -71,6 +71,8 @@ parser.add_argument('--fix', default='none', choices=['none', 'net', 'flow'], ty
 parser.add_argument('--predictPolicy', default='mean', choices=['mean', 'weight'], type=str)
 parser.add_argument('--pretrain', default='', type=str)
 parser.add_argument('--beta', default=0.1, type=float)
+parser.add_argument('--pseudo_std', default=0, type=float)
+parser.add_argument('--warmup_mixup', action='store_true')
 args = parser.parse_args()
 
 ## GPU Setup
@@ -102,6 +104,7 @@ test_loss_log = open(model_save_loc +'/test_loss.txt','w')
 train_acc = open(model_save_loc +'/train_acc.txt','w')
 train_loss = open(model_save_loc +'/train_loss.txt','w')
 label_count = open(model_save_loc +'/label_count.txt','w')
+pu_log = open(model_save_loc +'/pu.txt','w')
 
 ## wandb
 if (wandb != None):
@@ -144,12 +147,13 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             features_u12, outputs_u12 = net(inputs_u2)
 
             ## Pseudo-label
-            # pu = flowTrainer.get_pseudo_label(flownet, features_u11, features_u12)
-            pu = (outputs_u11 + outputs_u12) / 2
-            # flow_outputs_u11 = flowTrainer.predict(flownet, features_u11)
-            # flow_outputs_u12 = flowTrainer.predict(flownet, features_u12)
+            pu_flow = flowTrainer.get_pseudo_label(flownet, features_u11, features_u12, std = args.pseudo_std)
 
-            # pu = (flow_outputs_u11 + flow_outputs_u12) / 2
+            pu_net = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1)) / 2
+            log_pu(pu_flow, pu_net, labels_u_o)
+            # pu_flow = pu_flow**(1/2)
+            # pu = (pu_flow + pu_net) / 2
+            pu = pu_flow
             ptu = pu**(1/args.Tu)            ## Temparature Sharpening
             
             targets_u = ptu / ptu.sum(dim=1, keepdim=True)
@@ -307,15 +311,19 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
         inputs, labels = inputs.cuda(), labels.cuda() 
         labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
 
-        # mixed_input, mixed_target = mix_match(inputs, labels_one_hot, args.alpha_warmup)
-        feature, outputs = net(inputs)
+        if args.warmup_mixup:
+            mixed_input, mixed_target = mix_match(inputs, labels_one_hot, args.alpha_warmup)
+            feature, outputs = net(mixed_input)
+            flow_labels = mixed_target.unsqueeze(1).cuda()
+        else:  
+            feature, outputs = net(inputs)
+            flow_labels = labels_one_hot.unsqueeze(1).cuda()
         # mixed_target = distillation_label(labels_one_hot, outputs)
         logFeature(feature)            
         loss_ce = CEloss(outputs, labels)    
 
         # == flow ==
         feature = F.normalize(feature, dim=1)
-        flow_labels = labels_one_hot.unsqueeze(1).cuda()
         
         #
         # flow_labels = add_noise(flow_labels, epoch)
@@ -459,6 +467,7 @@ def Calculate_JSD(net, flowNet, num_samples):
         ## Get outputs of both network
         with torch.no_grad():
             feature = net(inputs)[0]
+            feature = F.normalize(feature, dim=1)
             out = flowTrainer.predict(flowNet, feature)
 
         ## Divergence clculator to record the diff. between ground truth and output prob. dist.  
@@ -613,6 +622,45 @@ def logFeature(feature):
         wandb.log(logMsg)
     return
 
+def log_pu(pu_flow, pu_net, gt):
+    prob_flow, predicted_flow = torch.max(pu_flow, 1)
+    prob_net, predicted_net = torch.max(pu_net, 1)
+
+    total = gt.size(0)
+    correct_flow = predicted_flow.eq(gt).cpu().sum().item()  
+    prob_sum_flow = prob_flow.cpu().sum().item()
+
+    correct_net = predicted_net.eq(gt).cpu().sum().item()  
+    prob_sum_net = prob_net.cpu().sum().item()
+
+    acc_flow = 100.*correct_flow/total
+    confidence_flow = prob_sum_flow/total
+
+    acc_net = 100.*correct_net/total
+    confidence_net = prob_sum_net/total
+
+    pu_log.write('\nepoch : ' + str(epoch))
+    pu_log.write('\n acc_flow : ' + str(acc_flow))
+    pu_log.write('\n confidence_flow : ' + str(confidence_flow))
+    
+    pu_log.write('\n acc_net : ' + str(acc_net))
+    pu_log.write('\n confidence_net : ' + str(confidence_net))
+
+    pu_log.write('\n pu_flow : ' + str(pu_flow[:5].cpu().numpy()))
+    pu_log.write('\n pu_net : ' + str(pu_net[:5].cpu().numpy()))
+    pu_log.write('\n gt : ' + str(gt[:5].cpu().numpy()))
+    
+    pu_log.flush()
+
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["pseudo/acc_flow"] = acc_flow
+        logMsg["pseudo/confidence_flow"] = confidence_flow
+        logMsg["pseudo/acc_net"] = acc_net
+        logMsg["pseudo/confidence_net"] = confidence_net
+        wandb.log(logMsg)
+    return
 
 def data2Tab(labels, values, name):
     data = [[label, val] for (label, val) in zip(labels, values)]
@@ -809,7 +857,7 @@ for epoch in range(start_epoch,args.num_epochs+1):
         save_model(net, flowNet, epoch, model_name, model_name_flow, acc)
         best_acc = acc
 
-    model_name = 'Net_{}.pth'.format(epoch)
-    model_name_flow = 'FlowNet_{}.pth'.format(epoch)
-    save_model(net, flowNet, epoch, model_name, model_name_flow, acc)
+    # model_name = 'Net_{}.pth'.format(epoch)
+    # model_name_flow = 'FlowNet_{}.pth'.format(epoch)
+    # save_model(net, flowNet, epoch, model_name, model_name_flow, acc)
 

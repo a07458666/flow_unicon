@@ -91,21 +91,21 @@ class FlowTrainer:
 
 
     def predict(self, net, feature, mean = 0, std = 0, sample_n = 1, origin=False):
-        batch_size = feature.size()[0]
-        feature = F.normalize(feature, dim=1)
-        feature = feature.repeat(sample_n, 1, 1)
-        input_z = torch.normal(mean = mean, std = std, size=(sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
-        delta_p = torch.zeros(input_z.shape[0], input_z.shape[1], 1).cuda()
-        
-        approx21, _ = net(input_z, feature, delta_p, reverse=True)
-        
-        probs = torch.clamp(approx21, min=0, max=1)
-        probs = probs.view(sample_n, -1, self.args.num_class)
-        probs_mean = torch.mean(probs, dim=0, keepdim=False)
-        probs_mean = F.normalize(probs_mean, dim=1, p=1)
-        if origin:
-            return approx21.detach().squeeze(1)
-        return probs_mean
+        with torch.no_grad():
+            batch_size = feature.size()[0]
+            feature = F.normalize(feature, dim=1)
+            feature = feature.repeat(sample_n, 1, 1)
+            input_z = torch.normal(mean = mean, std = std, size=(sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
+            delta_p = torch.zeros(input_z.shape[0], input_z.shape[1], 1).cuda()
+            
+            approx21, _ = net(input_z, feature, delta_p, reverse=True)
+            probs = torch.clamp(approx21, min=0, max=1)
+            probs = probs.view(sample_n, -1, self.args.num_class)
+            probs_mean = torch.mean(probs, dim=0, keepdim=False)
+            probs_mean = F.normalize(probs_mean, dim=1, p=1)
+            if origin:
+                return approx21.detach().squeeze(1)
+            return probs_mean
 
     def testByFlow(self, net, flownet, test_loader):
         net.eval()
@@ -144,9 +144,9 @@ class FlowTrainer:
         return y_onehot
 
     ## Pseudo-label
-    def get_pseudo_label(self, flownet, features_u11, features_u12):
-        flow_outputs_u11 = self.predict(flownet, features_u11)
-        flow_outputs_u12 = self.predict(flownet, features_u12)
+    def get_pseudo_label(self, flownet, features_u11, features_u12, std = 0):
+        flow_outputs_u11 = self.predict(flownet, features_u11, std)
+        flow_outputs_u12 = self.predict(flownet, features_u12, std)
 
         pu = (flow_outputs_u11 + flow_outputs_u12) / 2
 
