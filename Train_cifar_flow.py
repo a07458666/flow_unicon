@@ -154,7 +154,9 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             # pu_flow = pu_flow**(1/2)
             # pu = (pu_flow + pu_net) / 2
             pu = pu_flow
-            ptu = pu**(1/args.Tu)            ## Temparature Sharpening
+            lamb_Tu = (1 - linear_rampup(epoch, warm_up, 5, args.Tu))
+
+            ptu = pu**(1/lamb_Tu)            ## Temparature Sharpening
             
             targets_u = ptu / ptu.sum(dim=1, keepdim=True)
             targets_u = targets_u.detach()                  
@@ -208,11 +210,11 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         # Regularization feature var
         reg_f_var_loss = torch.clamp(1-torch.sqrt(flow_feature.var(dim=0) + 1e-10), min=0).mean()
         
-        logits_x = logits[:batch_size*2]
-        logits_u = logits[batch_size*2:]        
+        # logits_x = logits[:batch_size*2]
+        # logits_u = logits[batch_size*2:]        
         
         ## Combined Loss
-        Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
+        # Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
         
         ## Regularization
         # prior = torch.ones(args.num_class)/args.num_class
@@ -231,7 +233,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         log_p2 = (approx2 - delta_log_p2)
 
         # lamb_x = linear_rampup(epoch, warm_up, args.linear_x, args.lambda_x) + 1
-        lamb_u = linear_rampup(epoch, warm_up, args.linear_u, args.lambda_u)
+        lamb_u = linear_rampup(epoch, warm_up, args.linear_u, args.lambda_u) + 1
 
         
         loss_nll_x = -log_p2[:batch_size*2]
@@ -251,7 +253,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
 
         # print("loss_CLR: ", args.lambda_c * loss_simCLR )
         ## Total Loss
-        loss = Lx + lamb * Lu + args.lambda_c * loss_simCLR + loss_nll_x.mean() + lamb_u * loss_nll_u.mean() + reg_f_var_loss #+ penalty
+        loss = args.lambda_c * loss_simCLR + loss_nll_x.mean() + lamb_u * loss_nll_u.mean() + reg_f_var_loss #+ penalty #  Lx + lamb * Lu + 
 
         # Compute gradient and Do SGD step
         optimizer.zero_grad()
@@ -274,6 +276,8 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         if (wandb != None):
             logMsg = {}
             logMsg["epoch"] = epoch
+            logMsg["lamb_Tu"] = lamb_Tu
+            
             logMsg["loss/nll_x"] = loss_nll_x.mean().item()
             logMsg["loss/nll_u"] = loss_nll_u.mean().item()
 
@@ -320,7 +324,7 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
             flow_labels = labels_one_hot.unsqueeze(1).cuda()
         # mixed_target = distillation_label(labels_one_hot, outputs)
         logFeature(feature)            
-        loss_ce = CEloss(outputs, labels)    
+        # loss_ce = CEloss(outputs, labels)    
 
         # == flow ==
         feature = F.normalize(feature, dim=1)
@@ -341,7 +345,7 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
             penalty = conf_penalty(outputs)
             L = loss_nll + penalty #+ loss_ce   
         else:   
-            L = loss_nll + loss_ce
+            L = loss_nll #+ loss_ce
 
 
         optimizer.zero_grad()
