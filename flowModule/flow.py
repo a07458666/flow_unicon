@@ -4,29 +4,6 @@ from .cnf import CNF, SequentialFlow
 
 import torch.nn as nn
 
-# def _dropoutCondition(X, condition_pose, drop_prob):
-#     X = X.float()
-#     assert 0 <= condition_pose < X.shape[0]
-#     assert 0 <= drop_prob <= 1
-#     keep_prob = 1. - drop_prob
-#     mask = torch.ones(X.shape).to(X)
-#     mask[condition_pose] = (torch.randn(1) < keep_prob).float()
-#     return X * mask * (torch.tensor(X.shape[0]).to(X) / torch.sum(mask))
-
-# class dropoutCondition(nn.Module):
-#     def __init__(self, condition_pose, drop_prob):
-#         super().__init__()
-#         assert 0 <= drop_prob <= 1
-#         self.condition_pose = condition_pose
-#         self.keep_prob = 1. - drop_prob
-
-#     def forward(self, x):
-#         assert 0 <= self.condition_pose < x.shape[0]
-#         x = x.float()
-#         mask = torch.ones(x.shape).to(x)
-#         mask[self.condition_pose] = (torch.randn(1) < self.keep_prob).float()
-#         return x * mask * (torch.tensor(X.shape[0]).to(X) / torch.sum(mask))
-
 def count_nfe(model):
     class AccNumEvals(object):
 

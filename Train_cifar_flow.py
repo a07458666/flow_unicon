@@ -47,6 +47,7 @@ parser.add_argument('--alpha_warmup', default=0.2, type=float, help='parameter f
 parser.add_argument('--alpha', default=4, type=float, help='parameter for Beta')
 parser.add_argument('--linear_u', default=340, type=float, help='weight for unsupervised loss')
 parser.add_argument('--lambda_u', default=3, type=float, help='weight for unsupervised loss')
+parser.add_argument('--lambda_p', default=30, type=float, help='pseudo lamb')
 parser.add_argument('--linear_x', default=30, type=float, help='weight for unsupervised loss')
 parser.add_argument('--lambda_x', default=1, type=float, help='weight for supervised loss')
 parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
@@ -105,6 +106,7 @@ train_acc = open(model_save_loc +'/train_acc.txt','w')
 train_loss = open(model_save_loc +'/train_loss.txt','w')
 label_count = open(model_save_loc +'/label_count.txt','w')
 pu_log = open(model_save_loc +'/pu.txt','w')
+loss_log = open(model_save_loc +'/loss_batch.txt','w')
 
 ## wandb
 if (wandb != None):
@@ -154,7 +156,8 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             # pu_flow = pu_flow**(1/2)
             # pu = (pu_flow + pu_net) / 2
             pu = pu_flow
-            lamb_Tu = (1 - linear_rampup(epoch, warm_up, 5, args.Tu))
+            
+            lamb_Tu = (1 - linear_rampup(epoch, warm_up, args.lambda_p, args.Tu))
 
             ptu = pu**(1/lamb_Tu)            ## Temparature Sharpening
             
@@ -239,6 +242,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         loss_nll_x = -log_p2[:batch_size*2]
         loss_nll_u = -log_p2[batch_size*2:]
 
+        # log_loss(loss_nll_x.cpu().detach().numpy(), loss_nll_u.cpu().detach().numpy(), flow_mixed_target[:batch_size*2].cpu().detach().numpy(), flow_mixed_target[batch_size*2:].cpu().detach().numpy(), labels_x.cpu().detach().numpy(), labels_x_o.cpu().detach().numpy(), batch_idx)
         # mixup_x = mixed_target[:batch_size*2]
         # mixup_u = mixed_target[batch_size*2:]
         # print("mixed_target_x : ", mixup_x[:10])
@@ -365,9 +369,9 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
             logMsg = {}
             logMsg["epoch"] = epoch
             logMsg["loss/nll"] = loss_nll.item()
-            logMsg["loss/nll_max"] = -log_p2.max()
-            logMsg["loss/nll_min"] = -log_p2.min()
-            logMsg["loss/nll_var"] = -log_p2.var()
+            logMsg["loss/nll_max"] = (-log_p2).max()
+            logMsg["loss/nll_min"] = (-log_p2).min()
+            logMsg["loss/nll_var"] = (-log_p2).var()
             wandb.log(logMsg)
 
         sys.stdout.write('\r')
@@ -664,6 +668,79 @@ def log_pu(pu_flow, pu_net, gt):
         logMsg["pseudo/acc_net"] = acc_net
         logMsg["pseudo/confidence_net"] = confidence_net
         wandb.log(logMsg)
+    return
+
+
+def log_loss(loss_nll_x, loss_nll_u, target_x, target_u, labels_x, labels_x_o, batch_idx):
+    count = 10
+    print("loss_nll_x : ", loss_nll_x[:count])
+    print("loss_nll_u : ", loss_nll_u[:count])
+    print("target_x : ", target_x[:count])
+    print("target_u : ", target_u[:count])
+    print("labels_x : ", labels_x[:count])
+    print("labels_x_o : ", labels_x_o[:count])
+
+
+    loss_log.write('\n epoch : ' + str(epoch))
+    loss_log.write("\n loss_nll_x size : " + str(loss_nll_x.shape[0]))
+    loss_log.write("\n loss_nll_u size : " + str(loss_nll_u.shape[0]))
+    loss_log.write('\n loss_nll_x : ' + str(loss_nll_x[:count]))
+    loss_log.write('\n loss_nll_u : ' + str(loss_nll_u[:count]))
+    loss_log.write('\n target_x : ' + str(target_x[:count]))
+    loss_log.write('\n target_u : ' + str(target_u[:count]))
+    loss_log.write('\n labels_x_o : ' + str(labels_x_o[:count]))
+    
+    loss_log.flush()
+
+    plt.clf()
+    
+    kwargs = dict(histtype='stepfilled', alpha=0.75, density=False, bins=40)
+    plt.hist(loss_nll_x, color='green', label='loss_x', **kwargs)
+    plt.hist(loss_nll_u, color='red'  , label='loss_u', **kwargs)
+
+    plt.xlabel('NLL Values')
+    plt.ylabel('count')
+    plt.title(f'NLL Distribution of N Samples epoch :{epoch}_{batch_idx}')
+    plt.grid(True)
+    plt.savefig(f'{model_save_loc}/NLL_distribution/epoch{epoch}_{batch_idx}.png')
+
+    # prob_flow, predicted_flow = torch.max(pu_flow, 1)
+    # prob_net, predicted_net = torch.max(pu_net, 1)
+
+    # total = gt.size(0)
+    # correct_flow = predicted_flow.eq(gt).cpu().sum().item()  
+    # prob_sum_flow = prob_flow.cpu().sum().item()
+
+    # correct_net = predicted_net.eq(gt).cpu().sum().item()  
+    # prob_sum_net = prob_net.cpu().sum().item()
+
+    # acc_flow = 100.*correct_flow/total
+    # confidence_flow = prob_sum_flow/total
+
+    # acc_net = 100.*correct_net/total
+    # confidence_net = prob_sum_net/total
+
+    # pu_log.write('\n epoch : ' + str(epoch))
+    # pu_log.write('\n acc_flow : ' + str(acc_flow))
+    # pu_log.write('\n confidence_flow : ' + str(confidence_flow))
+    
+    # pu_log.write('\n acc_net : ' + str(acc_net))
+    # pu_log.write('\n confidence_net : ' + str(confidence_net))
+
+    # pu_log.write('\n pu_flow : ' + str(pu_flow[:5].cpu().numpy()))
+    # pu_log.write('\n pu_net : ' + str(pu_net[:5].cpu().numpy()))
+    # pu_log.write('\n gt : ' + str(gt[:5].cpu().numpy()))
+    
+    # pu_log.flush()
+
+    # if (wandb != None):
+    #     logMsg = {}
+    #     logMsg["epoch"] = epoch
+    #     logMsg["loss_di/acc_flow"] = acc_flow
+    #     logMsg["pseudo/confidence_flow"] = confidence_flow
+    #     logMsg["pseudo/acc_net"] = acc_net
+    #     logMsg["pseudo/confidence_net"] = confidence_net
+    #     wandb.log(logMsg)
     return
 
 def data2Tab(labels, values, name):
