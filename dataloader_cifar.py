@@ -36,11 +36,13 @@ class cifar_dataset(Dataset):
         root_dir_save = root_dir
 
         if dataset == 'cifar10':
-            root_dir = './data/cifar10/cifar-10-batches-py'            
+            root_dir = './data/cifar10/cifar-10-batches-py'        
             num_class =10         
-        else:
-            root_dir = './data/cifar100/'
+        elif dataset=='cifar100':
+            root_dir = './data/cifar100/cifar-100-python'
             num_class =100
+        else:
+            print(f"dataset not define {dataset}")
 
         ## For Asymmetric Noise (CIFAR10)    
         self.transition = {0:0,2:0,4:7,7:7,1:1,9:1,3:5,5:3,6:6,8:8} 
@@ -56,7 +58,6 @@ class cifar_dataset(Dataset):
                 self.test_data = self.test_data.transpose((0, 2, 3, 1))  
                 self.test_label = test_dic['labels']
             elif dataset=='cifar100':
-                root_dir = './data/cifar100/'
                 test_dic = unpickle('%s/test'%root_dir)
                 self.test_data = test_dic['data']
                 self.test_data = self.test_data.reshape((10000, 3, 32, 32))
