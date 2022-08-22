@@ -346,8 +346,8 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
         # == flow end ===
 
         if args.noise_mode=='asym':     # Penalize confident prediction for asymmetric noise
-            penalty = conf_penalty(outputs)
-            L = loss_nll + penalty #+ loss_ce   
+            #penalty = conf_penalty(outputs)
+            L = loss_nll #+ penalty #+ loss_ce   
         else:   
             L = loss_nll #+ loss_ce
 
@@ -750,11 +750,11 @@ def data2Tab(labels, values, name):
 
 def print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, batch_idx):
     label = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
-    refine_labels_x = [0]*10
-    target_labels_x = [0]*10
+    refine_labels_x = [0] * args.num_class
+    target_labels_x = [0] * args.num_class
 
-    pseudo_labels_u = [0]*10
-    target_labels_u = [0]*10
+    pseudo_labels_u = [0] * args.num_class
+    target_labels_u = [0] * args.num_class
     for i in targets_u.max(dim=1).indices:
         pseudo_labels_u[i.item()] += 1
     for i in labels_u_o:
