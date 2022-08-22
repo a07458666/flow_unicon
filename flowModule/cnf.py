@@ -51,6 +51,7 @@ class CNF(nn.Module):
         self.test_rtol = rtol
         self.solver_options = {}
         self.conditional = conditional
+        self.adjoint_options = {"norm": "seminorm"}
 
     def forward(self, x, context=None, logpx=None, integration_times=None, reverse=False):
         if logpx is None:
@@ -96,6 +97,7 @@ class CNF(nn.Module):
                 rtol=rtol,
                 method=self.solver,
                 options=self.solver_options,
+                adjoint_options= self.adjoint_options,
             )
         else:
             state_t = odeint(
@@ -105,6 +107,7 @@ class CNF(nn.Module):
                 atol=self.test_atol,
                 rtol=self.test_rtol,
                 method=self.test_solver,
+                adjoint_options= self.adjoint_options,
             )
 
         if len(integration_times) == 2:
