@@ -19,6 +19,8 @@ import matplotlib.pyplot as plt
 import collections.abc
 from collections.abc import MutableMapping
 
+from torch_ema import ExponentialMovingAverage
+
 try:
     import wandb
 except ImportError:
@@ -46,10 +48,13 @@ parser.add_argument('--metric', type=str, default = 'JSD', help='Comparison Metr
 parser.add_argument('--seed', default=123)
 parser.add_argument('--gpuid', default=0, type=int)
 parser.add_argument('--resume', action='store_true', help = 'Resume from the warmup checkpoint')
+parser.add_argument('--ema', action='store_true', help = 'Exponential Moving Average')
+parser.add_argument('--decay', default=0.995, type=float, help='Exponential Moving Average decay')
 parser.add_argument('--num_class', default=10, type=int)
 parser.add_argument('--data_path', default='./data/cifar10', type=str, help='path to dataset')
 parser.add_argument('--dataset', default='cifar10', type=str)
 parser.add_argument('--name', default="", type=str)
+parser.add_argument('--single_net', action='store_true', help = 'Train one net')
 args = parser.parse_args()
 
 ## GPU Setup 
@@ -91,7 +96,7 @@ if (wandb != None):
     wandb.define_metric("acc", summary="max")
 
 # SSL-Training
-def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloader):
+def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloader, ema1, ema2):
     net2.eval() # Freeze one network and train the other
     net.train()
 
@@ -125,14 +130,25 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
 
         with torch.no_grad():
             # Label co-guessing of unlabeled samples
-            _, outputs_u11 = net(inputs_u)
-            _, outputs_u12 = net(inputs_u2)
-            _, outputs_u21 = net2(inputs_u)
-            _, outputs_u22 = net2(inputs_u2)            
-            
+            if args.ema:
+                with ema1.average_parameters():
+                    _, outputs_u11 = net(inputs_u)
+                    _, outputs_u12 = net(inputs_u2)
+                with ema2.average_parameters():
+                    _, outputs_u21 = net2(inputs_u)
+                    _, outputs_u22 = net2(inputs_u2)
+            else:
+                _, outputs_u11 = net(inputs_u)
+                _, outputs_u12 = net(inputs_u2)
+                _, outputs_u21 = net2(inputs_u)
+                _, outputs_u22 = net2(inputs_u2)
+
             ## Pseudo-label
-            # pu = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1) + torch.softmax(outputs_u21, dim=1) + torch.softmax(outputs_u22, dim=1)) / 4       
-            pu = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1)) / 2
+            if args.single_net:
+                pu = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1)) / 2
+            else:
+                pu = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1) + torch.softmax(outputs_u21, dim=1) + torch.softmax(outputs_u22, dim=1)) / 4       
+            
 
             ptu = pu**(1/args.T)            ## Temparature Sharpening
             
@@ -140,8 +156,13 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
             targets_u = targets_u.detach()                  
 
             ## Label refinement
-            _, outputs_x  = net(inputs_x)
-            _, outputs_x2 = net(inputs_x2)            
+            if args.ema:
+                with ema1.average_parameters():
+                    _, outputs_x  = net(inputs_x)
+                    _, outputs_x2 = net(inputs_x2)
+            else:
+                _, outputs_x  = net(inputs_x)
+                _, outputs_x2 = net(inputs_x2)
             
             px = (torch.softmax(outputs_x, dim=1) + torch.softmax(outputs_x2, dim=1)) / 2
 
@@ -210,6 +231,10 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
+        if args.ema:
+            ema1.update()
+            ema2.update()
         
         ## wandb
         if (wandb != None):
@@ -235,7 +260,7 @@ def Dist_Func(pred, target):
     return dist
 
 ## For Standard Training 
-def warmup_standard(epoch,net,optimizer,dataloader):
+def warmup_standard(epoch,net,optimizer,dataloader, ema):
 
     loss_ce_t = 0
 
@@ -256,6 +281,8 @@ def warmup_standard(epoch,net,optimizer,dataloader):
 
         L.backward()  
         optimizer.step()                
+        if args.ema:
+            ema.update()
 
         loss_ce_t += loss.item()
 
@@ -323,8 +350,11 @@ def test(epoch,net1,net2):
         for batch_idx, (inputs, targets) in enumerate(test_loader):
             inputs, targets = inputs.cuda(), targets.cuda()
             _, outputs1 = net1(inputs)
-            _, outputs2 = net2(inputs)           
-            outputs = outputs1+outputs2
+            if args.single_net:
+                outputs = outputs1
+            else:
+                _, outputs2 = net2(inputs)           
+                outputs = outputs1+outputs2
             outputs = torch.nn.Softmax(dim=1).cuda()(outputs)     
             prob, predicted = torch.max(outputs, 1)            
             loss = CEloss(outputs, targets)  
@@ -353,6 +383,48 @@ def test(epoch,net1,net2):
     test_loss_log.flush()
     return acc
 
+def testEMA(epoch, net1, net2, ema1, ema2):
+    net1.eval()
+    net2.eval()
+
+    num_samples = 1000
+    correct = 0
+    total = 0
+    loss_x = 0
+    prob_sum = 0
+    with torch.no_grad():
+        for batch_idx, (inputs, targets) in enumerate(test_loader):
+            inputs, targets = inputs.cuda(), targets.cuda()
+            with ema1.average_parameters():
+                _, outputs1 = net1(inputs)
+            if args.single_net:
+                outputs = outputs1
+            else:
+                with ema2.average_parameters():
+                    _, outputs2 = net2(inputs)           
+                outputs = outputs1+outputs2
+            outputs = torch.nn.Softmax(dim=1).cuda()(outputs)     
+            prob, predicted = torch.max(outputs, 1)            
+            loss = CEloss(outputs, targets)  
+            loss_x += loss.item()
+
+            total += targets.size(0)
+            correct += predicted.eq(targets).cpu().sum().item()  
+            prob_sum += prob.cpu().sum().item()
+
+
+    acc = 100.*correct/total
+    confidence = prob_sum/total
+    print("\n| Test Epoch #%d\t Accuracy(EMA): %.2f%%\n" %(epoch,acc))  
+
+    ## wandb
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["acc/test_ema"] = acc
+        logMsg["confidence score(EMA)"] = confidence
+        wandb.log(logMsg)
+    return acc
 
 # KL divergence
 def kl_divergence(p, q):
@@ -368,7 +440,7 @@ class Jensen_Shannon(nn.Module):
         return 0.5*kl_divergence(p, m) + 0.5*kl_divergence(q, m)
 
 ## Calculate JSD
-def Calculate_JSD(model1, model2, num_samples):  
+def Calculate_JSD(model1, model2, num_samples, ema1, ema2):  
     JS_dist = Jensen_Shannon()
     JSD   = torch.zeros(num_samples)    
 
@@ -378,11 +450,20 @@ def Calculate_JSD(model1, model2, num_samples):
 
         ## Get outputs of both network
         with torch.no_grad():
-            out1 = torch.nn.Softmax(dim=1).cuda()(model1(inputs)[1])     
-            out2 = torch.nn.Softmax(dim=1).cuda()(model2(inputs)[1])
+            if args.ema:
+                with ema1.average_parameters():
+                    out1 = torch.nn.Softmax(dim=1).cuda()(model1(inputs)[1])
+                with ema2.average_parameters():
+                    out2 = torch.nn.Softmax(dim=1).cuda()(model2(inputs)[1])
+            else:
+                out1 = torch.nn.Softmax(dim=1).cuda()(model1(inputs)[1])
+                out2 = torch.nn.Softmax(dim=1).cuda()(model2(inputs)[1])
 
         ## Get the Prediction
-        out = (out1 + out2)/2     
+        if args.single_net:
+            out = out1
+        else:
+            out = (out1 + out2)/2     
 
         ## Divergence clculator to record the diff. between ground truth and output prob. dist.  
         dist = JS_dist(out,  F.one_hot(targets, num_classes = args.num_class))
@@ -534,6 +615,7 @@ loader = dataloader.cifar_dataloader(args.dataset, r=args.r, noise_mode=args.noi
 print('| Building net')
 net1 = create_model()
 net2 = create_model()
+
 cudnn.benchmark = True
 
 ## Semi-Supervised Loss
@@ -543,8 +625,16 @@ criterion  = SemiLoss()
 optimizer1 = optim.SGD(net1.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4) 
 optimizer2 = optim.SGD(net2.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
 
+
 scheduler1 = optim.lr_scheduler.CosineAnnealingLR(optimizer1, 280, 2e-4)
 scheduler2 = optim.lr_scheduler.CosineAnnealingLR(optimizer2, 280, 2e-4)
+
+if args.ema:
+    ema1 = ExponentialMovingAverage(net1.parameters(), decay=args.decay)
+    ema2 = ExponentialMovingAverage(net2.parameters(), decay=args.decay)
+else:
+    ema1 = None
+    ema2 = None
 
 ## Loss Functions
 CE       = nn.CrossEntropyLoss(reduction='none')
@@ -579,14 +669,15 @@ for epoch in range(start_epoch,args.num_epochs+1):
         warmup_trainloader = loader.run(0, 'warmup')
 
         print('Warmup Model')
-        warmup_standard(epoch, net1, optimizer1, warmup_trainloader)   
+        warmup_standard(epoch, net1, optimizer1, warmup_trainloader, ema1)   
 
-        print('\nWarmup Model')
-        warmup_standard(epoch, net2, optimizer2, warmup_trainloader) 
+        if not args.single_net:
+            print('\nWarmup Model')
+            warmup_standard(epoch, net2, optimizer2, warmup_trainloader, ema2) 
     
     else:
         ## Calculate JSD values and Filter Rate
-        prob = Calculate_JSD(net2, net1, num_samples)           
+        prob = Calculate_JSD(net1, net2, num_samples, ema1, ema2)           
         threshold = torch.mean(prob)
         if threshold.item()>args.d_u:
             threshold = threshold - (threshold-torch.min(prob))/args.tau
@@ -596,20 +687,28 @@ for epoch in range(start_epoch,args.num_epochs+1):
         print('Train Net1\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
         logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
-        train(epoch,net1,net2,optimizer1,labeled_trainloader, unlabeled_trainloader)    # train net1  
+        train(epoch, net1, net2, optimizer1,labeled_trainloader, unlabeled_trainloader, ema1, ema2)    # train net1  
 
-        ## Calculate JSD values and Filter Rate
-        prob = Calculate_JSD(net2, net1, num_samples)           
-        threshold = torch.mean(prob)
-        if threshold.item()>args.d_u:
-            threshold = threshold - (threshold-torch.min(prob))/args.tau
-        SR = torch.sum(prob<threshold).item()/num_samples            
+        if not args.single_net:
+            ## Calculate JSD values and Filter Rate
+            prob = Calculate_JSD(net2, net1, num_samples, ema2, ema1)           
+            threshold = torch.mean(prob)
+            if threshold.item()>args.d_u:
+                threshold = threshold - (threshold-torch.min(prob))/args.tau
+            SR = torch.sum(prob<threshold).item()/num_samples            
 
-        print('\nTrain Net2')
-        labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob)     # Uniform Selection
-        train(epoch, net2,net1,optimizer2,labeled_trainloader, unlabeled_trainloader)       # train net1
+            print('\nTrain Net2')
+            labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob)     # Uniform Selection
+            train(epoch, net2, net1, optimizer2,labeled_trainloader, unlabeled_trainloader, ema2, ema1)       # train net1
 
     acc = test(epoch,net1,net2)
+
+    if args.ema:
+        ema1.update()
+        ema2.update()
+    if args.ema:
+        accEMA = testEMA(epoch, net1, net2, ema1, ema2)
+
     scheduler1.step()
     scheduler2.step()
 

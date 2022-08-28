@@ -27,6 +27,8 @@ from flow_trainer import FlowTrainer
 from flowModule.utils import standard_normal_logprob
 from tqdm import tqdm
 
+from torch_ema import ExponentialMovingAverage
+
 try:
     import wandb
 except ImportError:
@@ -56,7 +58,7 @@ parser.add_argument('--Tx', default=0.5, type=float, help='sharpening temperatur
 parser.add_argument('--num_epochs', default=350, type=int)
 parser.add_argument('--r', default=0.5, type=float, help='noise ratio')
 parser.add_argument('--d_u',  default=0.47, type=float)
-parser.add_argument('--tau', default=2.5, type=float, help='filtering coefficient')
+parser.add_argument('--tau', default=5, type=float, help='filtering coefficient')
 parser.add_argument('--metric', type=str, default = 'JSD', help='Comparison Metric')
 parser.add_argument('--seed', default=123)
 parser.add_argument('--gpuid', default=0, type=int)
@@ -74,6 +76,9 @@ parser.add_argument('--pretrain', default='', type=str)
 parser.add_argument('--beta', default=0.1, type=float)
 parser.add_argument('--pseudo_std', default=0, type=float)
 parser.add_argument('--warmup_mixup', action='store_true')
+parser.add_argument('--ema', action='store_true', help = 'Exponential Moving Average')
+parser.add_argument('--decay', default=0.995, type=float, help='Exponential Moving Average decay')
+
 args = parser.parse_args()
 
 ## GPU Setup
@@ -117,7 +122,7 @@ if (wandb != None):
     wandb.define_metric("acc", summary="max")
 
 # SSL-Training
-def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader):
+def train(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader):
     net.train()
     flownet.train()
 
@@ -145,8 +150,13 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
 
         with torch.no_grad():
             # Label co-guessing of unlabeled samples
-            features_u11, outputs_u11 = net(inputs_u)
-            features_u12, outputs_u12 = net(inputs_u2)
+            if args.ema:
+                with net_ema.average_parameters():
+                    features_u11, outputs_u11 = net(inputs_u)
+                    features_u12, outputs_u12 = net(inputs_u2)    
+            else:
+                features_u11, outputs_u11 = net(inputs_u)
+                features_u12, outputs_u12 = net(inputs_u2)
 
             ## Pseudo-label
             pu_flow = flowTrainer.get_pseudo_label(flownet, features_u11, features_u12, std = args.pseudo_std)
@@ -157,7 +167,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             # pu = (pu_flow + pu_net) / 2
             pu = pu_flow
             
-            lamb_Tu = (1 - linear_rampup(epoch, warm_up, args.lambda_p, args.Tu))
+            lamb_Tu = (1 - linear_rampup(epoch+batch_idx/num_iter, warm_up, args.lambda_p, args.Tu))
 
             ptu = pu**(1/lamb_Tu)            ## Temparature Sharpening
             
@@ -165,9 +175,14 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
             targets_u = targets_u.detach()                  
 
             ## Label refinement
-            features_x, _  = net(inputs_x)
-            features_x2, _ = net(inputs_x2)            
-            
+            if args.ema:
+                with net_ema.average_parameters():
+                    features_x, _  = net(inputs_x)
+                    features_x2, _ = net(inputs_x2)            
+            else:
+                features_x, _  = net(inputs_x)
+                features_x2, _ = net(inputs_x2)
+
             px_o = flowTrainer.get_pseudo_label(flownet, features_x, features_x2)
             # flow_outputs_x = flowTrainer.predict(flownet, features_x)
             # flow_outputs_x2 = flowTrainer.predict(flownet, features_x2)
@@ -235,9 +250,8 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         delta_log_p2 = delta_log_p2.view(flow_mixed_target.size()[0], flow_mixed_target.shape[1], 1).sum(1)
         log_p2 = (approx2 - delta_log_p2)
 
-        # lamb_x = linear_rampup(epoch, warm_up, args.linear_x, args.lambda_x) + 1
-        lamb_u = linear_rampup(epoch, warm_up, args.linear_u, args.lambda_u) + 1
-
+        # lamb_x = linear_rampup(epoch+batch_idx/num_iter, warm_up, args.linear_x, args.lambda_x) + 1
+        lamb_u = linear_rampup(epoch+batch_idx/num_iter, warm_up, args.linear_u, args.lambda_u) + 1
         
         loss_nll_x = -log_p2[:batch_size*2]
         loss_nll_u = -log_p2[batch_size*2:]
@@ -271,6 +285,10 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
         else:
             optimizer.step()
             optimizerFlow.step()  
+
+        if args.ema:
+            net_ema.update()
+            flowNet_ema.update()
 
         # model_name = 'Net_{}.pth'.format(batch_idx)
         # model_name_flow = 'FlowNet_{}.pth'.format(batch_idx)
@@ -307,7 +325,7 @@ def train(epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, un
 
 
 ## For Standard Training 
-def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
+def warmup_standard(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, dataloader):
     flownet.train()
     if args.fix == 'net':
         net.eval()
@@ -327,14 +345,13 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
             feature, outputs = net(inputs)
             flow_labels = labels_one_hot.unsqueeze(1).cuda()
         # mixed_target = distillation_label(labels_one_hot, outputs)
+        # flow_labels = add_noise(flow_labels, epoch)
+
         logFeature(feature)            
         # loss_ce = CEloss(outputs, labels)    
 
         # == flow ==
         feature = F.normalize(feature, dim=1)
-        
-        #
-        # flow_labels = add_noise(flow_labels, epoch)
 
         delta_p = torch.zeros(flow_labels.shape[0], flow_labels.shape[1], 1).cuda()
         approx21, delta_log_p2 = flownet(flow_labels, feature, delta_p)
@@ -363,6 +380,10 @@ def warmup_standard(epoch, net, flownet, optimizer, optimizerFlow, dataloader):
         else:
             optimizer.step()
             optimizerFlow.step()  
+
+        if args.ema:
+            net_ema.update()
+            flowNet_ema.update()
 
         ## wandb
         if (wandb != None):
@@ -421,7 +442,7 @@ def warmup_val(epoch,net,optimizer, optimizerFlow,dataloader):
 
 ## Test Accuracy
 def test(epoch,net,flowNet):
-    acc, confidence = flowTrainer.testByFlow(net, flowNet, test_loader)
+    acc, confidence = flowTrainer.testByFlow(net, flowNet, net_ema, test_loader)
     print("\n| Test Epoch #%d\t Accuracy: %.2f%%\n" %(epoch,acc))  
     
     ## wandb
@@ -474,7 +495,11 @@ def Calculate_JSD(net, flowNet, num_samples):
 
         ## Get outputs of both network
         with torch.no_grad():
-            feature = net(inputs)[0]
+            if args.ema:
+                with net_ema.average_parameters():
+                    feature = net(inputs)[0]
+            else:
+                feature = net(inputs)[0]
             feature = F.normalize(feature, dim=1)
             out = flowTrainer.predict(flowNet, feature)
 
@@ -862,6 +887,14 @@ optimizerFlow = optim.SGD(flowNet.parameters(), lr=args.lr_f, momentum=0.9, weig
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epochs, args.lr / 100)
 schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, args.num_epochs, args.lr_f / 100)
 
+if args.ema:
+    net_ema = ExponentialMovingAverage(net.parameters(), decay=args.decay)
+    flowNet_ema = ExponentialMovingAverage(flowNet.parameters(), decay=args.decay)
+    flowTrainer.setEma(flowNet_ema)
+else:
+    net_ema = None
+    flowNet_ema = None
+
 ## Loss Functions
 CE       = nn.CrossEntropyLoss(reduction='none')
 CEloss   = nn.CrossEntropyLoss()
@@ -902,7 +935,7 @@ for epoch in range(start_epoch,args.num_epochs+1):
         warmup_trainloader = loader.run(0, 'warmup')
 
         print('Warmup Model')
-        warmup_standard(epoch, net, flowNet, optimizer, optimizerFlow, warmup_trainloader)   
+        warmup_standard(epoch, net, flowNet, net_ema, flowNet_ema, optimizer, optimizerFlow, warmup_trainloader)   
     
     else:
         ## Calculate JSD values and Filter Rate
@@ -913,9 +946,10 @@ for epoch in range(start_epoch,args.num_epochs+1):
         print('Train Net\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
         logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
-        train(epoch, net, flowNet,optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
+        train(epoch, net, flowNet, net_ema, flowNet_ema, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
 
     acc, confidence = test(epoch,net, flowNet)
+
     scheduler.step()
     schedulerFlow.step()
 

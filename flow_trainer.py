@@ -14,6 +14,7 @@ class FlowTrainer:
         self.mean = 0
         self.std = 0.2
         self.sample_n = 1
+        self.flowNet_ema = None
         return
 
     def train(epoch, encoder, net, optimizer, dataloader):
@@ -47,49 +48,6 @@ class FlowTrainer:
         model = model.cuda()
         return model
 
-    def flowSoftmax(self, approx21):
-        probs = torch.clamp(approx21, min=0, max=1)
-        probsSum = torch.sum(probs, 2).unsqueeze(1).expand(probs.size())
-        probs /= probsSum
-        return probs
-
-    ## Calculate flow density
-    def Calculate_density(self, encoder1, encoder2, model1, model2, num_samples, eval_loader):
-        encoder1.eval()
-        encoder2.eval()
-        model1.eval()
-        model2.eval()
-
-        densitys = torch.zeros(num_samples)    
-        for batch_idx, (inputs, targets, index) in enumerate(eval_loader):
-            inputs, targets = inputs.cuda(), targets.cuda()
-            batch_size = inputs.size()[0]
-
-            ## Get outputs of both network
-            with torch.no_grad():
-                input_z1 = torch.normal(mean = self.mean, std = self.std, size=(self.sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
-                delta_p1 = torch.zeros(input_z1.shape[0], input_z1.shape[1], 1).cuda()
-                input_z2 = torch.normal(mean = self.mean, std = self.std, size=(self.sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
-                delta_p2 = torch.zeros(input_z2.shape[0], input_z2.shape[1], 1).cuda()
-                cond1, _ = encoder1(inputs)
-                cond2, _ = encoder2(inputs)
-                feature1 = F.normalize(cond1, dim=1)
-                feature2 = F.normalize(cond2, dim=1)
-                labels_one_hot = torch.nn.functional.one_hot(targets, self.args.num_class).type(torch.cuda.FloatTensor)
-                flow_labels = labels_one_hot.unsqueeze(1).cuda()
-                approx21_1, _ = model1(flow_labels, feature1, delta_p1)
-                approx21_2, _ = model2(flow_labels, feature2, delta_p2)
-                approx2_1 = standard_normal_logprob(approx21_1).view(flow_labels.size()[0], -1).sum(1, keepdim=True)
-                approx2_2 = standard_normal_logprob(approx21_2).view(flow_labels.size()[0], -1).sum(1, keepdim=True)
-                
-            ## Get the Prediction
-            density = (approx2_1 + approx2_2)/2     
-            ## Divergence clculator to record the diff. between ground truth and output prob. density.  
-            densitys[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = density.squeeze(1)
-
-        return -densitys
-
-
     def predict(self, net, feature, mean = 0, std = 0, sample_n = 1, origin=False):
         with torch.no_grad():
             batch_size = feature.size()[0]
@@ -97,8 +55,11 @@ class FlowTrainer:
             feature = feature.repeat(sample_n, 1, 1)
             input_z = torch.normal(mean = mean, std = std, size=(sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
             delta_p = torch.zeros(input_z.shape[0], input_z.shape[1], 1).cuda()
-            
-            approx21, _ = net(input_z, feature, delta_p, reverse=True)
+            if self.args.ema:
+                with self.flowNet_ema.average_parameters():
+                    approx21, _ = net(input_z, feature, delta_p, reverse=True)
+            else:
+                approx21, _ = net(input_z, feature, delta_p, reverse=True)
             probs = torch.clamp(approx21, min=0, max=1)
             probs = probs.view(sample_n, -1, self.args.num_class)
             probs_mean = torch.mean(probs, dim=0, keepdim=False)
@@ -107,7 +68,7 @@ class FlowTrainer:
                 return approx21.detach().squeeze(1)
             return probs_mean
 
-    def testByFlow(self, net, flownet, test_loader):
+    def testByFlow(self, net, flownet, net_ema, test_loader):
         net.eval()
         flownet.eval()
         correct = 0
@@ -116,7 +77,11 @@ class FlowTrainer:
         with torch.no_grad():
             for batch_idx, (inputs, targets) in enumerate(test_loader):
                 inputs, targets = inputs.cuda(), targets.cuda()
-                feature, _ = net(inputs)       
+                if self.args.ema:
+                    with net_ema.average_parameters():
+                        feature, _ = net(inputs)
+                else:
+                       feature, _ = net(inputs)
                 outputs = self.predict(flownet, feature, origin=True)
                 # if (batch_idx == 1):
                 #     print("outputs", outputs[:10])
@@ -160,3 +125,7 @@ class FlowTrainer:
             # targets_u = pu / pu.sum(dim=1, keepdim=True)
             # targets_u = targets_u.detach()
             return pu
+
+    def setEma(self, ema):
+        self.flowNet_ema = ema
+        return
