@@ -423,3 +423,23 @@ def accuracy(output, target, topk=(1,)):
 def set_parameter_requires_grad(model, flag = False):
     for param in model.parameters():
         param.requires_grad = flag
+
+def linear_rampup(current, warm_up, rampup_length=16, lambda_w=1.0):
+    current = np.clip((current-warm_up) / rampup_length, 0.0, 1.0)
+    return lambda_w * float(current)
+
+
+def mix_match(inputs, targets, alpha = 4):
+    # MixMatch
+    l = np.random.beta(alpha, alpha)        
+    l = max(l, 1-l)
+
+    idx = torch.randperm(inputs.size(0))
+
+    input_a, input_b   = inputs, inputs[idx]
+    target_a, target_b = targets, targets[idx]
+    
+    ## Mixup
+    mixed_input  = l * input_a  + (1 - l) * input_b        
+    mixed_target = l * target_a + (1 - l) * target_b
+    return mixed_input, mixed_target
