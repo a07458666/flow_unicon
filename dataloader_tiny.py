@@ -139,7 +139,7 @@ def make_dataset(
     return instances,class_to_idx
 
 class tiny_imagenet_dataset(Dataset):
-    def __init__(self, SR, log, root, transform, mode, ratio, noise_mode, noise_file = '', num_samples=10000, pred=[], probability=[], paths=[], num_class=200):
+    def __init__(self, SR, root, transform, mode, ratio, noise_mode, noise_file = '', num_samples=10000, pred=[], probability=[], paths=[], num_class=200):
 
         self.root = root
         self.transform = transform
@@ -343,14 +343,12 @@ class tiny_imagenet_dataset(Dataset):
             return len(self.train_imgs)
 
 class tinyImagenet_dataloader():  
-    def __init__(self, root, batch_size, num_batches, num_workers, log, ratio,  noise_mode, noise_file):    
+    def __init__(self, root, batch_size, num_workers, ratio,  noise_mode, noise_file):    
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.num_batches = num_batches
         self.root = root
         self.ratio = ratio
         self.noise_mode = noise_mode
-        self.log = log
         self.noise_file = noise_file
 
    #      self.transform_train = transforms.Compose([
@@ -385,7 +383,7 @@ class tinyImagenet_dataloader():
 
     def run(self,SR, mode,pred=[],prob=[],paths=[]):        
         if mode=='warmup':
-            warmup_dataset = tiny_imagenet_dataset(SR, self.log ,self.root,transform=self.transforms["warmup"], mode='all', ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file)
+            warmup_dataset = tiny_imagenet_dataset(SR, self.root,transform=self.transforms["warmup"], mode='all', ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file)
             warmup_loader = DataLoader(
                 dataset=warmup_dataset, 
                 batch_size=self.batch_size*8,
@@ -394,14 +392,14 @@ class tinyImagenet_dataloader():
             return warmup_loader
 
         elif mode=='train':
-            labeled_dataset = tiny_imagenet_dataset(SR, self.log ,self.root,transform=self.transforms["labeled"], mode='labeled',  ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file, pred=pred, probability=prob,paths=paths)
+            labeled_dataset = tiny_imagenet_dataset(SR, self.root,transform=self.transforms["labeled"], mode='labeled',  ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file, pred=pred, probability=prob,paths=paths)
             labeled_loader = DataLoader(
                 dataset=labeled_dataset, 
                 batch_size=self.batch_size,
                 shuffle=True, drop_last= True,
                 num_workers=self.num_workers)
 
-            unlabeled_dataset = tiny_imagenet_dataset(SR, self.log ,self.root,transform=self.transforms["unlabeled"], mode='unlabeled',  ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file, pred=pred, probability=prob,paths=paths)
+            unlabeled_dataset = tiny_imagenet_dataset(SR, self.root,transform=self.transforms["unlabeled"], mode='unlabeled',  ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file, pred=pred, probability=prob,paths=paths)
             unlabeled_loader = DataLoader(
                 dataset=unlabeled_dataset, 
                 batch_size=int(self.batch_size),
@@ -410,7 +408,7 @@ class tinyImagenet_dataloader():
             return labeled_loader,unlabeled_loader
 
         elif mode=='eval_train':
-            eval_dataset = tiny_imagenet_dataset(SR, self.log ,self.root,transform=self.transform_test, mode='all', ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file)
+            eval_dataset = tiny_imagenet_dataset(SR, self.root,transform=self.transform_test, mode='all', ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file)
             eval_loader = DataLoader(
                 dataset=eval_dataset, 
                 batch_size=250,
@@ -419,7 +417,7 @@ class tinyImagenet_dataloader():
             return eval_loader        
 
         elif mode=='test':
-            test_dataset = tiny_imagenet_dataset(SR, self.log ,self.root,transform=self.transform_test, mode='test', ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file)
+            test_dataset = tiny_imagenet_dataset(SR, self.root, transform=self.transform_test, mode='test', ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file)
             test_loader = DataLoader(
                 dataset=test_dataset, 
                 batch_size=250,
@@ -428,7 +426,7 @@ class tinyImagenet_dataloader():
             return test_loader             
 
         elif mode=='val':
-            val_dataset = tiny_imagenet_dataset(SR, self.log ,self.root,transform=self.transform_test, mode='val', ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file)
+            val_dataset = tiny_imagenet_dataset(SR, self.root,transform=self.transform_test, mode='val', ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file)
             val_loader = DataLoader(
                 dataset=val_dataset, 
                 batch_size=250,

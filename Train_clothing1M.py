@@ -26,11 +26,8 @@ parser.add_argument('--lr', '--learning_rate', default=0.005, type=float, help='
 parser.add_argument('--alpha', default=0.5, type=float, help='parameter for Beta')
 parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
 parser.add_argument('--T', default=0.5, type=float, help='sharpening temperature')
-parser.add_argument('--d_u',  default=0.7, type=float)
-parser.add_argument('--tau',  default=5, type=float)
 parser.add_argument('--num_epochs', default=200, type=int)
 parser.add_argument('--id', default='clothing1m')
-parser.add_argument('--tau', default=5, type=float, help='filtering coefficient')
 parser.add_argument('--data_path', default='./data/Clothing1M_org', type=str, help='path to dataset')
 parser.add_argument('--seed', default=123)
 parser.add_argument('--gpuid', default=0, type=int)
@@ -388,8 +385,6 @@ for epoch in range(0, args.num_epochs+1):
         eval_loader = loader.run(0.5,'eval_train')  
         prob2, paths2 = Calculate_JSD(epoch, net1, net2)                          ## Calculate the JSD distances 
         threshold   = torch.mean(prob2)                                           ## Simply Take the average as the threshold
-        if threshold.item()>args.d_u:
-            threshold = threshold - (threshold-torch.min(JSD))/args.tau
 
         SR = torch.sum(prob2<threshold).item()/prob2.size()[0]                    ## Calculate the Ratio of clean samples      
         
@@ -404,8 +399,6 @@ for epoch in range(0, args.num_epochs+1):
         net1.load_state_dict(torch.load(os.path.join(model_save_loc, '%s_net1.pth.tar'%args.id)))
         prob1, paths1 = Calculate_JSD(epoch,net2, net1)  
         threshold     = torch.mean(prob1)
-        if threshold.item()>args.d_u:
-            threshold = threshold - (threshold-torch.min(JSD))/args.tau   
         SR = torch.sum(prob1<threshold).item()/prob1.size()[0]
 
         for i in range(nb_repeat):

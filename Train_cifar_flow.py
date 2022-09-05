@@ -12,7 +12,7 @@ import torch.backends.cudnn as cudnn
 import torchvision
 import random
 import os
-import argparse
+from config import argumentParse
 import numpy as np
 from PreResNet_cifar import *
 import dataloader_cifar as dataloader
@@ -40,46 +40,8 @@ except ImportError:
 # wandb.init(project="noisy-label-project", entity="..")
 
 ## Arguments to pass 
-parser = argparse.ArgumentParser(description='PyTorch CIFAR Training')
-parser.add_argument('--batch_size', default=256, type=int, help='train batchsize') 
-parser.add_argument('--lr', '--learning_rate', default=0.02, type=float, help='initial learning rate')
-parser.add_argument('--lr_f', '--flow_learning_rate', default=2e-5, type=float, help='initial flow learning rate')
-parser.add_argument('--noise_mode',  default='sym')
-parser.add_argument('--alpha_warmup', default=0.2, type=float, help='parameter for Beta (warmup)')
-parser.add_argument('--alpha', default=4, type=float, help='parameter for Beta')
-parser.add_argument('--linear_u', default=340, type=float, help='weight for unsupervised loss')
-parser.add_argument('--lambda_u', default=3, type=float, help='weight for unsupervised loss')
-parser.add_argument('--lambda_p', default=30, type=float, help='pseudo lamb')
-parser.add_argument('--linear_x', default=30, type=float, help='weight for unsupervised loss')
-parser.add_argument('--lambda_x', default=1, type=float, help='weight for supervised loss')
-parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
-parser.add_argument('--Tu', default=0.5, type=float, help='sharpening temperature')
-parser.add_argument('--Tx', default=0.5, type=float, help='sharpening temperature')
-parser.add_argument('--num_epochs', default=350, type=int)
-parser.add_argument('--r', default=0.5, type=float, help='noise ratio')
-parser.add_argument('--d_u',  default=0.47, type=float)
-parser.add_argument('--tau', default=5, type=float, help='filtering coefficient')
-parser.add_argument('--metric', type=str, default = 'JSD', help='Comparison Metric')
-parser.add_argument('--seed', default=123)
-parser.add_argument('--gpuid', default=0, type=int)
-parser.add_argument('--resume', action='store_true', help = 'Resume from the warmup checkpoint')
-parser.add_argument('--num_class', default=10, type=int)
-parser.add_argument('--data_path', default='./data/cifar10', type=str, help='path to dataset')
-parser.add_argument('--dataset', default='cifar10', type=str)
-parser.add_argument('--flow_modules', default="8-8-8-8", type=str)
-parser.add_argument('--name', default="", type=str)
-parser.add_argument('--flowRefine', action='store_true')
-parser.add_argument('--ce', action='store_true')
-parser.add_argument('--fix', default='none', choices=['none', 'net', 'flow'], type=str)
-parser.add_argument('--predictPolicy', default='mean', choices=['mean', 'weight'], type=str)
-parser.add_argument('--pretrain', default='', type=str)
-parser.add_argument('--beta', default=0.1, type=float)
-parser.add_argument('--pseudo_std', default=0, type=float)
-parser.add_argument('--warmup_mixup', action='store_true')
-parser.add_argument('--ema', action='store_true', help = 'Exponential Moving Average')
-parser.add_argument('--decay', default=0.995, type=float, help='Exponential Moving Average decay')
-
-args = parser.parse_args()
+args = argumentParse()
+print("args : ",vars(args))
 
 ## GPU Setup
 torch.cuda.set_device(args.gpuid)
@@ -167,7 +129,7 @@ def train(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, l
             # pu = (pu_flow + pu_net) / 2
             pu = pu_flow
             
-            lamb_Tu = (1 - linear_rampup(epoch+batch_idx/num_iter, warm_up, args.lambda_p, args.Tu))
+            lamb_Tu = (1 - linear_rampup(epoch+batch_idx/num_iter, args.warm_up, args.lambda_p, args.Tu))
 
             ptu = pu**(1/lamb_Tu)            ## Temparature Sharpening
             
@@ -251,7 +213,7 @@ def train(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, l
         log_p2 = (approx2 - delta_log_p2)
 
         # lamb_x = linear_rampup(epoch+batch_idx/num_iter, warm_up, args.linear_x, args.lambda_x) + 1
-        lamb_u = linear_rampup(epoch+batch_idx/num_iter, warm_up, args.linear_u, args.lambda_u) + 1
+        lamb_u = linear_rampup(epoch+batch_idx/num_iter, args.warm_up, args.linear_u, args.lambda_u) + 1
         
         loss_nll_x = -log_p2[:batch_size*2]
         loss_nll_u = -log_p2[batch_size*2:]
@@ -345,7 +307,6 @@ def warmup_standard(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimi
             feature, outputs = net(inputs)
             flow_labels = labels_one_hot.unsqueeze(1).cuda()
         # mixed_target = distillation_label(labels_one_hot, outputs)
-        # flow_labels = add_noise(flow_labels, epoch)
 
         logFeature(feature)            
         # loss_ce = CEloss(outputs, labels)    
@@ -626,14 +587,6 @@ def create_model():
     model = ResNet18(num_classes=args.num_class)
     model = model.cuda()
     return model
-
-def add_noise(labels, epoch):
-    # labels = labels + (labels==1.0).float() * torch.rand(*labels.shape).to(labels) * args.beta
-    # labels = labels - (labels==0.0).float() * torch.rand(*labels.shape).to(labels) * args.beta
-    limit = linear_rampup(epoch + 1, 0, 10, 1)
-    print("limit : ", limit)
-    labels = labels * limit
-    return labels
 
 def distillation_label(labels, pseudo, alpha = 0.2):
     with torch.no_grad():

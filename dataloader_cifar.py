@@ -27,7 +27,7 @@ def unpickle(file):
 
 
 class cifar_dataset(Dataset): 
-    def __init__(self, dataset, sample_ratio, r, noise_mode, root_dir, transform, mode, noise_file='', pred=[], probability=[], log=''): 
+    def __init__(self, dataset, sample_ratio, r, noise_mode, root_dir, transform, mode, noise_file='', pred=[], probability=[]): 
         
         self.r = r # noise ratio
         self.sample_ratio = sample_ratio
@@ -223,14 +223,13 @@ class cifar_dataset(Dataset):
             return len(self.test_data)   
         
 class cifar_dataloader():  
-    def __init__(self, dataset, r, noise_mode, batch_size, num_workers, root_dir, log, noise_file=''):
+    def __init__(self, dataset, r, noise_mode, batch_size, num_workers, root_dir, noise_file=''):
         self.dataset = dataset
         self.r = r
         self.noise_mode = noise_mode
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.root_dir = root_dir
-        self.log = log
         self.noise_file = noise_file
         
         if self.dataset=='cifar10':
@@ -325,7 +324,7 @@ class cifar_dataloader():
             return trainloader
                                      
         elif mode=='train':
-            labeled_dataset = cifar_dataset(dataset=self.dataset, sample_ratio= sample_ratio, noise_mode=self.noise_mode, r=self.r, root_dir=self.root_dir, transform=self.transforms["labeled"], mode="labeled", noise_file=self.noise_file, pred=pred, probability=prob,log=self.log)              
+            labeled_dataset = cifar_dataset(dataset=self.dataset, sample_ratio= sample_ratio, noise_mode=self.noise_mode, r=self.r, root_dir=self.root_dir, transform=self.transforms["labeled"], mode="labeled", noise_file=self.noise_file, pred=pred, probability=prob)              
             labeled_trainloader = DataLoader(
                 dataset=labeled_dataset, 
                 # batch_size=self.batch_size,

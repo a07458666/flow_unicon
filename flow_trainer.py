@@ -4,21 +4,31 @@ import torch.nn.functional as F
 
 from flowModule.flow import cnf
 from flowModule.utils import standard_normal_logprob, linear_rampup, mix_match
+from flowModule.logger import logFeature
+from flowModule.jensen_shannon import js_distance
+
 import time
 import sys
 from tqdm import tqdm
 from Contrastive_loss import *
 from torch_ema import ExponentialMovingAverage
 
+try:
+    import wandb
+except ImportError:
+    wandb = None
+    logger.info("Install Weights & Biases for experiment logging via 'pip install wandb' (recommended)")
+
+
 class FlowTrainer:
-    def __init__(self, args, warm_up) -> None:
+    def __init__(self, args) -> None:
         self.args = args
         self.cond_size = 128
         self.mean = 0
         self.std = 0.2
         self.sample_n = 1
         self.flowNet_ema = None
-        self.warm_up = warm_up
+        self.warm_up = args.warm_up
         self.contrastive_criterion = SupConLoss()
         return
 
@@ -86,7 +96,7 @@ class FlowTrainer:
 
             sys.stdout.write('\r')
             sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t NLL-loss: %.4f'
-                    %(self.args.dataset, self.args.r, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
+                    %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
             sys.stdout.flush()
 
     def train(self, epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader):
@@ -164,13 +174,13 @@ class FlowTrainer:
                 # print("targets_u : ", targets_u[:10])
                 # targets_x = labels_x
 
-                print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, batch_idx)
+                self.print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, epoch)
 
                 logFeature(torch.cat([features_u11, features_u12, features_x, features_x2], dim=0))
                 # Calculate label sources
-                u_sources_pseudo = Dist_Func(targets_u, labels_u_o)
-                x_sources_origin = Dist_Func(labels_x, labels_x_o)
-                x_sources_refine = Dist_Func(targets_x, labels_x_o)
+                u_sources_pseudo = js_distance(targets_u, labels_u_o, self.args.num_class)
+                x_sources_origin = js_distance(labels_x, labels_x_o, self.args.num_class)
+                x_sources_refine = js_distance(targets_x, labels_x_o, self.args.num_class)
                 # print("x_sources_origin :", x_sources_origin)
                 # print("labels_x :", labels_x[:20])
                 # print("labels_x_o :", labels_x_o[:20])
@@ -182,13 +192,13 @@ class FlowTrainer:
             f2 = F.normalize(f2, dim=1)
             features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
 
-            loss_simCLR = contrastive_criterion(features)
+            loss_simCLR = self.contrastive_criterion(features)
 
 
             all_inputs  = torch.cat([inputs_x3, inputs_x4, inputs_u3, inputs_u4], dim=0)
             all_targets = torch.cat([targets_x, targets_x, targets_u, targets_u], dim=0)
 
-            mixed_input, mixed_target = mix_match(all_inputs, all_targets, args.alpha)
+            mixed_input, mixed_target = mix_match(all_inputs, all_targets, self.args.alpha)
                     
             flow_feature, logits = net(mixed_input) # add flow_feature
 
@@ -268,11 +278,11 @@ class FlowTrainer:
 
         sys.stdout.write('\r')
         sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Contrastive Loss:%.4f NLL(x) loss: %.2f NLL(u) loss: %.2f'
-                %(self.args.dataset, self.args.r, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_simCLR.item(),  loss_nll_x.mean().item(), loss_nll_u.mean().item()))
+                %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_simCLR.item(),  loss_nll_x.mean().item(), loss_nll_u.mean().item()))
         sys.stdout.flush()
 
     ## Calculate JSD
-    def Calculate_JSD(net, flowNet, num_samples):  
+    def Calculate_JSD(self, net, flowNet, num_samples, eval_loader):  
         JSD   = torch.zeros(num_samples)    
         for batch_idx, (inputs, targets, index) in tqdm(enumerate(eval_loader)):
             inputs, targets = inputs.cuda(), targets.cuda()
@@ -289,9 +299,10 @@ class FlowTrainer:
                 out = self.predict(flowNet, feature)
 
             ## Divergence clculator to record the diff. between ground truth and output prob. dist.  
-            dist = Dist_Func(out, targets)
+            dist = js_distance(out, targets, self.args.num_class)
             JSD[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = dist
         return JSD
+
     def create_model(self):
         model = cnf(self.args.num_class, self.args.flow_modules, self.cond_size, 1).cuda()
         model = model.cuda()
@@ -364,17 +375,41 @@ class FlowTrainer:
 
         pu = (flow_outputs_u11 + flow_outputs_u12) / 2
 
-        if(self.args.predictPolicy == "weight"):
-            pu_label = torch.distributions.Categorical(pu).sample()
-            pu_onehot = self.torch_onehot(pu_label, pu.shape[1]).detach()
-            return pu_onehot
-        else:
-            # ptu = pu**(1/self.args.T)            ## Temparature Sharpening
-
-            # targets_u = pu / pu.sum(dim=1, keepdim=True)
-            # targets_u = targets_u.detach()
-            return pu
+        pu_label = torch.distributions.Categorical(pu).sample()
+        pu_onehot = self.torch_onehot(pu_label, pu.shape[1]).detach()
+        return pu_onehot
 
     def setEma(self, ema):
         self.flowNet_ema = ema
         return
+    
+    def print_label_status(self, targets_x, targets_u, labels_x_o, labels_u_o, epoch):
+        refine_labels_x = [0] * self.args.num_class
+        target_labels_x = [0] * self.args.num_class
+
+        pseudo_labels_u = [0] * self.args.num_class
+        target_labels_u = [0] * self.args.num_class
+        for i in targets_u.max(dim=1).indices:
+            pseudo_labels_u[i.item()] += 1
+        for i in labels_u_o:
+            target_labels_u[i.item()] += 1
+
+        for i in targets_x.max(dim=1).indices:
+            refine_labels_x[i.item()] += 1
+        for i in labels_x_o:
+            target_labels_x[i.item()] += 1
+        # label_count.write('\nepoch : ' + str(epoch))
+        # label_count.write('\npseudo_labels_u : ' + str(pseudo_labels_u))
+        # label_count.write('\ntarget_labels_u : ' + str(target_labels_u))
+        # label_count.write('\nrefine_labels_x : ' + str(refine_labels_x))
+        # label_count.write('\ntarget_labels_x : ' + str(target_labels_x))
+        # label_count.flush()
+
+        if (wandb != None):
+            logMsg = {}
+            logMsg["epoch"] = epoch
+            logMsg["label_count/pseudo_labels_u"] =  max(pseudo_labels_u)
+            logMsg["label_count/target_labels_u"] =  max(target_labels_u)
+            logMsg["label_count/refine_labels_x"] =  max(refine_labels_x)
+            logMsg["label_count/target_labels_x"] =  max(target_labels_x)
+            wandb.log(logMsg)

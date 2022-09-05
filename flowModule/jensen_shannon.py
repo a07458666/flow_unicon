@@ -1,4 +1,5 @@
 import torch.nn.functional as F
+import torch.nn as nn
 
 ## Jensen-Shannon Divergence 
 class Jensen_Shannon(nn.Module):

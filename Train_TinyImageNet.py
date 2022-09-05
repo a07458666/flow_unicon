@@ -16,25 +16,22 @@ import copy
 from PreResNet_tiny import *
 from Contrastive_loss import *
 
-parser = argparse.ArgumentParser(description='PyTorch Clothing1M Training')
-parser.add_argument('--batch_size', default=40, type=int, help='train batchsize') 
-parser.add_argument('--lr', '--learning_rate', default=0.01, type=float, help='initial learning rate')
-parser.add_argument('--alpha', default=4, type=float, help='parameter for Beta')
-parser.add_argument('--lambda_u', default=30, type=float, help='weight for unsupervised loss')
+parser = argparse.ArgumentParser(description='PyTorch Tiny ImageNet Training')
+parser.add_argument('--batch_size', default=64, type=int, help='train batchsize') 
+parser.add_argument('--lr', '--learning_rate', default=0.05, type=float, help='initial learning rate')
+parser.add_argument('--alpha', default=0.5, type=float, help='parameter for Beta')
+parser.add_argument('--lambda_u', default=45, type=float, help='weight for unsupervised loss')
 parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
-parser.add_argument('--T', default=0.2, type=float, help='sharpening temperature')
+parser.add_argument('--T', default=0.5, type=float, help='sharpening temperature')
 parser.add_argument('--num_epochs', default=400, type=int)
 parser.add_argument('--id', default='TinyImage')
 parser.add_argument('--data_path', default='./data/tiny-imagenet-200', type=str, help='path to dataset')
 parser.add_argument('--seed', default=123)
 parser.add_argument('--gpuid', default=0, type=int)
 parser.add_argument('--noise_mode',  default='sym')
-parser.add_argument('--d_u',  default=0.7, type=float)
-parser.add_argument('--tau',  default=5, type=float)
 parser.add_argument('--ratio', default=0.2 , type=float, help='noise ratio')
 parser.add_argument('--resume', default=False , type=bool, help='Resume from chekpoint')
 parser.add_argument('--num_class', default=200, type=int)
-parser.add_argument('--num_batches', default=2000, type=int)
 parser.add_argument('--dataset', default='TinyImageNet', type=str)
 
 args = parser.parse_args()
@@ -297,7 +294,7 @@ log=open(os.path.join(model_save_loc, 'test_acc_%s.txt'%args.id),'w')
 log.flush()
 
 warm_up = 20
-loader = dataloader(root=args.data_path, batch_size=args.batch_size, num_workers=4, num_batches=args.num_batches, log = log, ratio = args.ratio, noise_mode = args.noise_mode, noise_file='%s/clean_%.2f_%s.npz'%(args.data_path,args.ratio, args.noise_mode))
+loader = dataloader(root=args.data_path, batch_size=args.batch_size, num_workers=4, ratio = args.ratio, noise_mode = args.noise_mode, noise_file='%s/clean_%.2f_%s.npz'%(args.data_path,args.ratio, args.noise_mode))
 
 print('| Building net')
 net1 = create_model()
@@ -365,8 +362,6 @@ for epoch in range(start_epoch,args.num_epochs+1):
         ## JSD Value Calculation
         prob = Calculate_JSD(net1, net2, num_samples)
         threshold = torch.mean(prob)
-        if threshold.item()>args.d_u:
-            threshold = threshold - (threshold-torch.min(prob))/arg.tau
         SR = torch.sum(prob<threshold).item()/num_samples
         
         print('Train Net1')

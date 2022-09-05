@@ -1,24 +1,22 @@
 from __future__ import print_function
-import imp
-import sys
-from syslog import LOG_MAIL
 
+import os
+from syslog import LOG_MAIL
 from urllib3 import Retry
+import random
+import numpy as np
+import matplotlib.pyplot as plt
+
+# torch
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 import torchvision
-import random
-import os
-import argparse
-import numpy as np
-from PreResNet_cifar import *
-import dataloader_cifar as dataloader
-from math import log2
-import matplotlib.pyplot as plt
+import torchvision.models as models
 
+# 
 import time
 import collections.abc
 from collections.abc import MutableMapping
@@ -26,6 +24,8 @@ from flow_trainer import FlowTrainer
 from flowModule.utils import standard_normal_logprob, linear_rampup
 from flowModule.jensen_shannon import js_distance
 from tqdm import tqdm
+from torch_ema import ExponentialMovingAverage
+from config import argumentParse
 
 try:
     import wandb
@@ -38,45 +38,8 @@ except ImportError:
 # wandb.init(project="noisy-label-project", entity="..")
 
 ## Arguments to pass 
-parser = argparse.ArgumentParser(description='PyTorch CIFAR Training')
-parser.add_argument('--batch_size', default=256, type=int, help='train batchsize') 
-parser.add_argument('--lr', '--learning_rate', default=0.02, type=float, help='initial learning rate')
-parser.add_argument('--lr_f', '--flow_learning_rate', default=2e-5, type=float, help='initial flow learning rate')
-parser.add_argument('--noise_mode',  default='sym')
-parser.add_argument('--alpha_warmup', default=0.2, type=float, help='parameter for Beta (warmup)')
-parser.add_argument('--alpha', default=4, type=float, help='parameter for Beta')
-parser.add_argument('--linear_u', default=340, type=float, help='weight for unsupervised loss')
-parser.add_argument('--lambda_u', default=3, type=float, help='weight for unsupervised loss')
-parser.add_argument('--lambda_p', default=30, type=float, help='pseudo lamb')
-parser.add_argument('--linear_x', default=30, type=float, help='weight for unsupervised loss')
-parser.add_argument('--lambda_x', default=1, type=float, help='weight for supervised loss')
-parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
-parser.add_argument('--Tu', default=0.5, type=float, help='sharpening temperature')
-parser.add_argument('--Tx', default=0.5, type=float, help='sharpening temperature')
-parser.add_argument('--num_epochs', default=350, type=int)
-parser.add_argument('--r', default=0.5, type=float, help='noise ratio')
-parser.add_argument('--d_u',  default=0.47, type=float)
-parser.add_argument('--tau', default=5, type=float, help='filtering coefficient')
-parser.add_argument('--seed', default=123)
-parser.add_argument('--gpuid', default=0, type=int)
-parser.add_argument('--resume', action='store_true', help = 'Resume from the warmup checkpoint')
-parser.add_argument('--num_class', default=10, type=int)
-parser.add_argument('--data_path', default='./data/cifar10', type=str, help='path to dataset')
-parser.add_argument('--dataset', default='cifar10', type=str)
-parser.add_argument('--flow_modules', default="8-8-8-8", type=str)
-parser.add_argument('--name', default="", type=str)
-parser.add_argument('--flowRefine', action='store_true')
-parser.add_argument('--ce', action='store_true')
-parser.add_argument('--fix', default='none', choices=['none', 'net', 'flow'], type=str)
-parser.add_argument('--predictPolicy', default='mean', choices=['mean', 'weight'], type=str)
-parser.add_argument('--pretrain', default='', type=str)
-parser.add_argument('--beta', default=0.1, type=float)
-parser.add_argument('--pseudo_std', default=0, type=float)
-parser.add_argument('--warmup_mixup', action='store_true')
-parser.add_argument('--ema', action='store_true', help = 'Exponential Moving Average')
-parser.add_argument('--decay', default=0.995, type=float, help='Exponential Moving Average decay')
-
-args = parser.parse_args()
+args = argumentParse()
+print("args : ",vars(args))
 
 ## GPU Setup
 torch.cuda.set_device(args.gpuid)
@@ -85,23 +48,31 @@ torch.manual_seed(args.seed)
 torch.cuda.manual_seed_all(args.seed)
 
 ## Download the Datasets
-if args.dataset== 'cifar10':
-    torchvision.datasets.CIFAR10(args.data_path,train=True, download=True)
-    torchvision.datasets.CIFAR10(args.data_path,train=False, download=True)
-elif args.dataset== 'cifar100':
-    torchvision.datasets.CIFAR100(args.data_path,train=True, download=True)
-    torchvision.datasets.CIFAR100(args.data_path,train=False, download=True)
+if args.dataset== 'cifar10' or args.dataset== 'cifar100':
+    from dataloader_cifar import cifar_dataloader as dataloader
+    from PreResNet_cifar import *
+    if args.dataset == 'cifar10':
+        torchvision.datasets.CIFAR10(args.data_path,train=True, download=True)
+        torchvision.datasets.CIFAR10(args.data_path,train=False, download=True)
+    else:
+        torchvision.datasets.CIFAR100(args.data_path,train=True, download=True)
+        torchvision.datasets.CIFAR100(args.data_path,train=False, download=True)
+elif args.dataset=='TinyImageNet':
+    from PreResNet_tiny import *
+    from dataloader_tiny import tinyImagenet_dataloader as dataloader
+
+
 
 ## Checkpoint Location
-folder = args.dataset + '_' + args.noise_mode + '_' + str(args.r)  + '_flow_' + args.name
+folder = args.dataset + '_' + args.noise_mode + '_' + str(args.ratio)  + '_flow_' + args.name
 model_save_loc = './checkpoint/' + folder
 if not os.path.exists(model_save_loc):
     os.mkdir(model_save_loc)
     os.mkdir(model_save_loc + '/JSD_distribution')
 
 ## Log files
-stats_log=open(model_save_loc +'/%s_%.1f_%s'%(args.dataset,args.r,args.noise_mode)+'_stats.txt','w') 
-test_log=open(model_save_loc +'/%s_%.1f_%s'%(args.dataset,args.r,args.noise_mode)+'_acc.txt','w')     
+stats_log=open(model_save_loc +'/%s_%.1f_%s'%(args.dataset,args.ratio,args.noise_mode)+'_stats.txt','w') 
+test_log=open(model_save_loc +'/%s_%.1f_%s'%(args.dataset,args.ratio,args.noise_mode)+'_acc.txt','w')     
 test_loss_log = open(model_save_loc +'/test_loss.txt','w')
 train_acc = open(model_save_loc +'/train_acc.txt','w')
 train_loss = open(model_save_loc +'/train_loss.txt','w')
@@ -111,7 +82,6 @@ loss_log = open(model_save_loc +'/loss_batch.txt','w')
 
 ## wandb
 if (wandb != None):
-    os.environ["WANDB_WATCH"] = "false"
     wandb.init(project="FlowUNICON", entity="andy-su", name=folder)
     wandb.config.update(args)
     wandb.define_metric("loss", summary="min")
@@ -135,9 +105,7 @@ def test(epoch,net,flowNet):
 
 def Selection_Rate(prob):
     threshold = torch.mean(prob)
-    if threshold.item()>args.d_u:
-        threshold = threshold - (threshold-torch.min(prob))/args.tau
-    SR = torch.sum(prob<threshold).item()/num_samples
+    SR = torch.sum(prob<threshold).item()/args.num_samples
 
     if SR <= 1/args.num_class or SR >= 1.0:
         new_SR = np.clip(SR, 1/args.num_class, 0.9)
@@ -151,7 +119,7 @@ def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
     origin_prob =  labeled_trainloader.dataset.origin_prob
     labeled_prob = [origin_prob[i] for i in labeled_idx]
     unlabeled_prob = [origin_prob[i] for i in unlabeled_idx]
-    sample_ratio = torch.sum(prob<threshold).item()/num_samples
+    sample_ratio = torch.sum(prob<threshold).item()/args.num_samples
 
     num_cleanset, num_noiseset = len(labeled_trainloader.dataset), len(unlabeled_trainloader.dataset)
     num_wholeset = num_cleanset + num_noiseset
@@ -229,13 +197,6 @@ def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
         logMsg["JSD_selection/noise_f1"] = noise_f1
         wandb.log(logMsg)
 
-class SemiLoss(object):
-    def __call__(self, outputs_x, targets_x, outputs_u, targets_u, epoch, warm_up):
-        probs_u = torch.softmax(outputs_u, dim=1)
-        Lx = -torch.mean(torch.sum(F.log_softmax(outputs_x, dim=1) * targets_x, dim=1))
-        Lu = torch.mean((probs_u - targets_u)**2)
-        return Lx, Lu, linear_rampup(epoch,warm_up, args.lambda_u)
-
 class NegEntropy(object):
     def __call__(self,outputs):
         probs = torch.softmax(outputs, dim=1)
@@ -245,18 +206,6 @@ def create_model():
     model = ResNet18(num_classes=args.num_class)
     model = model.cuda()
     return model
-
-def logFeature(feature):
-    ## wandb
-    if (wandb != None):
-        logMsg = {}
-        logMsg["Feature/max"] = feature.max()
-        logMsg["Feature/min"] = feature.min()
-        logMsg["Feature/mean"] = feature.mean()
-        logMsg["Feature/var"] = feature.var()
-        logMsg["Feature/var_dim"] = feature.var(dim=0).mean()
-        wandb.log(logMsg)
-    return
 
 def log_pu(pu_flow, pu_net, gt):
     prob_flow, predicted_flow = torch.max(pu_flow, 1)
@@ -335,7 +284,7 @@ def save_model(net, flowNet, epoch, model_name, model_name_flow, acc = 0):
     checkpoint = {
         'net': net.state_dict(),
         'Model_number': 1,
-        'Noise_Ratio': args.r,
+        'Noise_Ratio': args.ratio,
         'Loss Function': 'CrossEntropyLoss',
         'Optimizer': 'SGD',
         'Noise_mode': args.noise_mode,
@@ -349,7 +298,7 @@ def save_model(net, flowNet, epoch, model_name, model_name_flow, acc = 0):
     checkpoint_flow = {
         'net': flowNet.state_dict(),
         'Model_number': 3,
-        'Noise_Ratio': args.r,
+        'Noise_Ratio': args.ratio,
         'Loss Function': 'log-likelihood',
         'Optimizer': 'SGD',
         'Noise_mode': args.noise_mode,
@@ -361,28 +310,22 @@ def save_model(net, flowNet, epoch, model_name, model_name_flow, acc = 0):
     torch.save(checkpoint, os.path.join(model_save_loc, model_name))
     torch.save(checkpoint_flow, os.path.join(model_save_loc, model_name_flow))
 
-## Choose Warmup period based on Dataset
-num_samples = 50000
-if args.dataset=='cifar10':
-    warm_up = 10
-elif args.dataset=='cifar100':
-    warm_up = 30
-
 ## Call the dataloader
-loader = dataloader.cifar_dataloader(args.dataset, r=args.r, noise_mode=args.noise_mode,batch_size=args.batch_size,num_workers=4,\
-    root_dir=model_save_loc,log=stats_log, noise_file='%s/clean_%.4f_%s.npz'%(args.data_path,args.r, args.noise_mode))
+if args.dataset== 'cifar10' or args.dataset== 'cifar100':
+    loader = dataloader(args.dataset, r=args.ratio, noise_mode=args.noise_mode,batch_size=args.batch_size,num_workers=4,\
+        root_dir=model_save_loc, noise_file='%s/clean_%.4f_%s.npz'%(args.data_path,args.ratio, args.noise_mode))
+elif args.dataset== 'TinyImageNet':
+    loader = dataloader(root=args.data_path, batch_size=args.batch_size, num_workers=4, ratio = args.ratio, noise_mode = args.noise_mode, noise_file='%s/clean_%.2f_%s.npz'%(args.data_path,args.ratio, args.noise_mode))
+
 
 print('| Building net')
 net = create_model()
 
 # flow model
-flowTrainer = FlowTrainer(args, warm_up)
+flowTrainer = FlowTrainer(args)
 flowNet = flowTrainer.create_model()
 
 cudnn.benchmark = True
-
-## Semi-Supervised Loss
-criterion  = SemiLoss()
 
 ## Optimizer and Scheduler
 optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4) 
@@ -405,12 +348,12 @@ model_name = 'Net_warmup.pth'
 model_name_flow = 'FlowNet_warmup.pth'
 
 if args.resume:
-    start_epoch = warm_up
+    start_epoch = args.warm_up
     net.load_state_dict(torch.load(os.path.join(model_save_loc, model_name))['net'])
     flowNet.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow))['net'])
 elif args.pretrain != '':
     start_epoch = 0
-    warm_up = 1
+    args.warm_up = 1
     net.load_state_dict(torch.load(args.pretrain)['net'])
 else:
     start_epoch = 0
@@ -425,16 +368,16 @@ for epoch in range(start_epoch,args.num_epochs+1):
     warmup_trainloader = loader.run(0,'warmup')
     
     ## Warmup Stage 
-    if epoch<warm_up:       
+    if epoch<args.warm_up:       
         warmup_trainloader = loader.run(0, 'warmup')
 
         print('Warmup Model')
-        warmup_standard(epoch, net, flowNet, net_ema, flowNet_ema, optimizer, optimizerFlow, warmup_trainloader)   
+        flowTrainer.warmup_standard(epoch, net, flowNet, net_ema, flowNet_ema, optimizer, optimizerFlow, warmup_trainloader)   
     
     else:
         ## Calculate JSD values and Filter Rate
         print("Calculate JSD")
-        prob = Calculate_JSD(net, flowNet, num_samples)
+        prob = flowTrainer.Calculate_JSD(net, flowNet, args.num_samples, eval_loader)
         SR , threshold = Selection_Rate(prob)
         
         print('Train Net\n')
@@ -456,7 +399,7 @@ for epoch in range(start_epoch,args.num_epochs+1):
         wandb.log(logMsg)
 
     if acc > best_acc:
-        if epoch <warm_up:
+        if epoch <args.warm_up:
             model_name = 'Net_warmup.pth'
             model_name_flow = 'FlowNet_warmup.pth'
         else:
