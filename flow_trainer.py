@@ -2,10 +2,17 @@ from urllib3 import Retry
 import torch
 import torch.nn.functional as F
 
-from flowModule.flow import cnf
-from flowModule.utils import standard_normal_logprob
 import time
 import sys
+import torch.nn as nn
+
+# nsf
+from nflows.flows.base import Flow
+from nflows.distributions.normal import ConditionalDiagonalNormal, StandardNormal
+from nflows.transforms.base import CompositeTransform
+from nflows.transforms.autoregressive import MaskedAffineAutoregressiveTransform
+from nflows.transforms.permutations import ReversePermutation, Permutation
+from nflows.nn.nets import ResidualNet
 
 class FlowTrainer:
     def __init__(self, args) -> None:
@@ -17,55 +24,44 @@ class FlowTrainer:
         self.flowNet_ema = None
         return
 
-    def train(epoch, encoder, net, optimizer, dataloader):
-        encoder.eval()
-        net.train()
-        num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
-        
-        for batch_idx, (inputs, labels, path) in enumerate(dataloader):
-            inputs, labels = inputs.cuda(), labels.cuda() 
-            optimizer.zero_grad()
-            
-            feature, _ = encoder(inputs)
-            delta_p = torch.zeros(labels.shape[0], labels.shape[1], 1).cuda() 
-            approx21, delta_log_p2 = net(labels, feature, delta_p)
-            
-            approx2 = standard_normal_logprob(approx21).view(labels.size()[0], -1).sum(1, keepdim=True)
-            delta_log_p2 = delta_log_p2.view(labels.size()[0], labels.shape[1], 1).sum(1)
-            log_p2 = (approx2 - delta_log_p2)
-            loss = -log_p2.mean()
+    def create_model(self, input_dim = 10, hidden_dim = 128, context_dim = 128, num_layers = 4):
+        base_dist = ConditionalDiagonalNormal(shape=[input_dim], context_encoder=nn.Linear(context_dim, input_dim*2))
+        # base_dist = StandardNormal(shape=[input_dim])
 
-            L.backward()  
-            optimizer.step()                
+        transforms = []
+        for _ in range(num_layers):
+            transforms.append(ReversePermutation(features=input_dim))
+            transforms.append(MaskedAffineAutoregressiveTransform(features=input_dim, 
+                                                                hidden_features=hidden_dim, 
+                                                                context_features=context_dim,
+                                                                activation= F.tanh,
+                                                                use_residual_blocks=False))
+        transform = CompositeTransform(transforms)
 
-            sys.stdout.write('\r')
-            sys.stdout.write('%s:%.1f-%s | (flow) Epoch [%3d/%3d] Iter[%3d/%3d]\t CE-loss: %.4f'
-                    %(self.args.dataset, self.args.r, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss.item()))
-            sys.stdout.flush()
+        flow = Flow(transform, base_dist)
 
-    def create_model(self):
-        model = cnf(self.args.num_class, self.args.flow_modules, self.cond_size, 1).cuda()
-        model = model.cuda()
-        return model
+        return flow.cuda()
 
     def predict(self, net, feature, mean = 0, std = 0, sample_n = 1, origin=False):
         with torch.no_grad():
             batch_size = feature.size()[0]
             feature = F.normalize(feature, dim=1)
-            feature = feature.repeat(sample_n, 1, 1)
-            input_z = torch.normal(mean = mean, std = std, size=(sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
-            delta_p = torch.zeros(input_z.shape[0], input_z.shape[1], 1).cuda()
+            # feature = feature.repeat(sample_n, 1, 1)
+            # input_z = torch.normal(mean = mean, std = std, size=(sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
+            # delta_p = torch.zeros(input_z.shape[0], input_z.shape[1], 1).cuda()
             if self.args.ema:
                 with self.flowNet_ema.average_parameters():
-                    approx21, _ = net(input_z, feature, delta_p, reverse=True)
+                    samples, log_prob = net.sample_and_log_prob(sample_n, feature)
             else:
-                approx21, _ = net(input_z, feature, delta_p, reverse=True)
-            probs = torch.clamp(approx21, min=0, max=1)
+                samples, log_prob  = net.sample_and_log_prob(sample_n, feature)
+            # print("samples : ", samples[:10])
+            probs = torch.clamp(samples, min=0, max=1)
             probs = probs.view(sample_n, -1, self.args.num_class)
             probs_mean = torch.mean(probs, dim=0, keepdim=False)
             probs_mean = F.normalize(probs_mean, dim=1, p=1)
+            # print("prob : ", probs_mean[:10])
             if origin:
-                return approx21.detach().squeeze(1)
+                return samples.detach().squeeze(1)
             return probs_mean
 
     def testByFlow(self, net, flownet, net_ema, test_loader):
@@ -94,6 +90,7 @@ class FlowTrainer:
 
         acc = 100.*correct/total
         ## confidence score
+        print("prob_sum : ", prob_sum)
         confidence = prob_sum/total
 
         return acc, confidence

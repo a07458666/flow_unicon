@@ -89,7 +89,6 @@ label_count = open(model_save_loc +'/label_count.txt','w')
 
 ## wandb
 if (wandb != None):
-    os.environ["WANDB_WATCH"] = "false"
     wandb.init(project="FlowUNICON", entity="andy-su", name=folder)
     wandb.config.update(args)
     wandb.define_metric("loss", summary="min")
@@ -657,6 +656,8 @@ else:
     start_epoch = 0
 
 best_acc = 0
+
+wandb.watch(models = (net1,net2),log ="gradients",log_freq = 10,log_graph = False)
 
 ## Warmup and SSL-Training 
 for epoch in range(start_epoch,args.num_epochs+1):   

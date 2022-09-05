@@ -24,10 +24,18 @@ import time
 import collections.abc
 from collections.abc import MutableMapping
 from flow_trainer import FlowTrainer
-from flowModule.utils import standard_normal_logprob
+
 from tqdm import tqdm
 
 from torch_ema import ExponentialMovingAverage
+
+# nsf
+from nflows.flows.base import Flow
+from nflows.distributions.normal import ConditionalDiagonalNormal
+from nflows.transforms.base import CompositeTransform
+from nflows.transforms.autoregressive import MaskedAffineAutoregressiveTransform
+from nflows.transforms.permutations import ReversePermutation
+from nflows.nn.nets import ResidualNet
 
 try:
     import wandb
@@ -57,7 +65,7 @@ parser.add_argument('--Tu', default=0.5, type=float, help='sharpening temperatur
 parser.add_argument('--Tx', default=0.5, type=float, help='sharpening temperature')
 parser.add_argument('--num_epochs', default=350, type=int)
 parser.add_argument('--r', default=0.5, type=float, help='noise ratio')
-parser.add_argument('--d_u',  default=0.47, type=float)
+parser.add_argument('--d_u',  default=0.7, type=float)
 parser.add_argument('--tau', default=5, type=float, help='filtering coefficient')
 parser.add_argument('--metric', type=str, default = 'JSD', help='Comparison Metric')
 parser.add_argument('--seed', default=123)
@@ -115,7 +123,6 @@ loss_log = open(model_save_loc +'/loss_batch.txt','w')
 
 ## wandb
 if (wandb != None):
-    os.environ["WANDB_WATCH"] = "false"
     wandb.init(project="FlowUNICON", entity="andy-su", name=folder)
     wandb.config.update(args)
     wandb.define_metric("loss", summary="min")
@@ -242,36 +249,18 @@ def train(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, l
 
         ## Flow loss
         flow_feature = F.normalize(flow_feature, dim=1)
-        flow_mixed_target = mixed_target.unsqueeze(1).cuda()
-        delta_p = torch.zeros(flow_mixed_target.shape[0], flow_mixed_target.shape[1], 1).cuda() 
-        approx21, delta_log_p2 = flownet(flow_mixed_target, flow_feature, delta_p)
-        
-        approx2 = standard_normal_logprob(approx21).view(mixed_target.size()[0], -1).sum(1, keepdim=True)
-        delta_log_p2 = delta_log_p2.view(flow_mixed_target.size()[0], flow_mixed_target.shape[1], 1).sum(1)
-        log_p2 = (approx2 - delta_log_p2)
+        flow_mixed_target = mixed_target.cuda()
+
+        loss_nll = flownet.log_prob(inputs=flow_mixed_target, context=flow_feature)
 
         # lamb_x = linear_rampup(epoch+batch_idx/num_iter, warm_up, args.linear_x, args.lambda_x) + 1
         lamb_u = linear_rampup(epoch+batch_idx/num_iter, warm_up, args.linear_u, args.lambda_u) + 1
         
-        loss_nll_x = -log_p2[:batch_size*2]
-        loss_nll_u = -log_p2[batch_size*2:]
+        loss_nll_x = (-loss_nll[:batch_size*2]).mean()
+        loss_nll_u = (-loss_nll[batch_size*2:]).mean()
 
-        # log_loss(loss_nll_x.cpu().detach().numpy(), loss_nll_u.cpu().detach().numpy(), flow_mixed_target[:batch_size*2].cpu().detach().numpy(), flow_mixed_target[batch_size*2:].cpu().detach().numpy(), labels_x.cpu().detach().numpy(), labels_x_o.cpu().detach().numpy(), batch_idx)
-        # mixup_x = mixed_target[:batch_size*2]
-        # mixup_u = mixed_target[batch_size*2:]
-        # print("mixed_target_x : ", mixup_x[:10])
-        # print("mixed_target_u : ", mixup_u[:10])
-        # print("loss_nll_x : ", loss_nll_x[:10])
-        # print("loss_nll_u : ", loss_nll_u[:10])
-        # print("targets_x : ", targets_x[:10])
-        # print("px_o : ", px_o[:10])
-        # print("targets_u : ", targets_u[:10])
-        # print("labels_x_o : ", labels_x_o[:10])
-        # print("labels_u_o : ", labels_u_o[:10])
-
-        # print("loss_CLR: ", args.lambda_c * loss_simCLR )
         ## Total Loss
-        loss = args.lambda_c * loss_simCLR + loss_nll_x.mean() + lamb_u * loss_nll_u.mean() + reg_f_var_loss #+ penalty #  Lx + lamb * Lu + 
+        loss = args.lambda_c * loss_simCLR + loss_nll_x + lamb_u * loss_nll_u + reg_f_var_loss #+ penalty #  Lx + lamb * Lu + 
 
         # Compute gradient and Do SGD step
         optimizer.zero_grad()
@@ -300,8 +289,8 @@ def train(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, l
             logMsg["epoch"] = epoch
             logMsg["lamb_Tu"] = lamb_Tu
             
-            logMsg["loss/nll_x"] = loss_nll_x.mean().item()
-            logMsg["loss/nll_u"] = loss_nll_u.mean().item()
+            logMsg["loss/nll_x"] = loss_nll_x.item()
+            logMsg["loss/nll_u"] = loss_nll_u.item()
 
             logMsg["loss/nll_x_max"] = loss_nll_x.max()
             logMsg["loss/nll_x_min"] = loss_nll_x.min()
@@ -340,10 +329,10 @@ def warmup_standard(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimi
         if args.warmup_mixup:
             mixed_input, mixed_target = mix_match(inputs, labels_one_hot, args.alpha_warmup)
             feature, outputs = net(mixed_input)
-            flow_labels = mixed_target.unsqueeze(1).cuda()
+            flow_labels = mixed_target.cuda()
         else:  
             feature, outputs = net(inputs)
-            flow_labels = labels_one_hot.unsqueeze(1).cuda()
+            flow_labels = labels_one_hot.cuda()
         # mixed_target = distillation_label(labels_one_hot, outputs)
         # flow_labels = add_noise(flow_labels, epoch)
 
@@ -352,14 +341,9 @@ def warmup_standard(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimi
 
         # == flow ==
         feature = F.normalize(feature, dim=1)
+        log_p2 = flownet.log_prob(inputs=flow_labels, context=feature)
+        loss_nll = (-log_p2).mean()
 
-        delta_p = torch.zeros(flow_labels.shape[0], flow_labels.shape[1], 1).cuda()
-        approx21, delta_log_p2 = flownet(flow_labels, feature, delta_p)
-        
-        approx2 = standard_normal_logprob(approx21).view(flow_labels.size()[0], -1).sum(1, keepdim=True)
-        delta_log_p2 = delta_log_p2.view(flow_labels.size()[0], flow_labels.shape[1], 1).sum(1)
-        log_p2 = (approx2 - delta_log_p2)
-        loss_nll = -log_p2.mean()
         # == flow end ===
 
         if args.noise_mode=='asym':     # Penalize confident prediction for asymmetric noise
@@ -372,7 +356,7 @@ def warmup_standard(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimi
         optimizer.zero_grad()
         optimizerFlow.zero_grad()
         L.backward()
-
+        
         if args.fix == 'flow':
             optimizer.step()
         elif args.fix == 'net':
@@ -872,7 +856,9 @@ net = create_model()
 
 # flow model
 flowTrainer = FlowTrainer(args)
-flowNet = flowTrainer.create_model()
+flowNet = flowTrainer.create_model(args.num_class, 128, 128, 4)
+
+wandb.watch(models = (net,flowNet),log ="gradients",log_freq = 10,log_graph = False )
 
 cudnn.benchmark = True
 
@@ -881,8 +867,8 @@ criterion  = SemiLoss()
 
 ## Optimizer and Scheduler
 optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4) 
-optimizerFlow = optim.SGD(flowNet.parameters(), lr=args.lr_f, momentum=0.9, weight_decay=5e-4)
-# optimizerFlow = optim.AdamW(flowNet.parameters(), lr=args.lr_f)
+# optimizerFlow = optim.SGD(flowNet.parameters(), lr=args.lr_f, momentum=0.9)
+optimizerFlow = optim.AdamW(flowNet.parameters(), lr=args.lr_f)
 
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epochs, args.lr / 100)
 schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, args.num_epochs, args.lr_f / 100)
