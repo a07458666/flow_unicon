@@ -7,3 +7,4 @@ lr: 2e-2
 lr_f: 4e-4
 warm_up: 10
 num_samples: 50000
+lambda_p: 50

@@ -50,7 +50,7 @@ class cifar_dataset(Dataset):
         num_sample     = 50000
         self.class_ind = {}
 
-        if self.mode=='test':
+        if self.mode=='val':
             if dataset=='cifar10':    
                 test_dic = unpickle('%s/test_batch'%root_dir)
                 self.test_data = test_dic['data']
@@ -210,14 +210,14 @@ class cifar_dataset(Dataset):
             img = self.transform(img)            
             return img, target, index
 
-        elif self.mode=='test':
+        elif self.mode=='val':
             img, target = self.test_data[index], self.test_label[index]
             img = Image.fromarray(img)
             img = self.transform(img)            
             return img, target
            
     def __len__(self):
-        if self.mode!='test':
+        if self.mode!='val':
             return len(self.train_data)
         else:
             return len(self.test_data)   
@@ -342,8 +342,8 @@ class cifar_dataloader():
 
             return labeled_trainloader, unlabeled_trainloader                
         
-        elif mode=='test':
-            test_dataset = cifar_dataset(dataset=self.dataset, sample_ratio= sample_ratio, noise_mode=self.noise_mode, r=self.r, root_dir=self.root_dir, transform=self.transform_test, mode='test')      
+        elif mode=='val':
+            test_dataset = cifar_dataset(dataset=self.dataset, sample_ratio= sample_ratio, noise_mode=self.noise_mode, r=self.r, root_dir=self.root_dir, transform=self.transform_test, mode='val')      
             test_loader = DataLoader(
                 dataset=test_dataset, 
                 batch_size=100,

@@ -88,7 +88,7 @@ if (wandb != None):
     wandb.define_metric("acc", summary="max")
 
 ## Test Accuracy
-def test(epoch,net,flowNet):
+def test(epoch,net,flowNet, test_loader):
     acc, confidence = flowTrainer.testByFlow(net, flowNet, net_ema, test_loader)
     print("\n| Test Epoch #%d\t Accuracy: %.2f%%\n" %(epoch,acc))  
     
@@ -363,7 +363,7 @@ best_acc = 0
 ## Warmup and SSL-Training 
 for epoch in range(start_epoch,args.num_epochs+1):
     startTime = time.time() 
-    test_loader = loader.run(0, 'test')
+    test_loader = loader.run(0, 'val')
     eval_loader = loader.run(0, 'eval_train')   
     warmup_trainloader = loader.run(0,'warmup')
     
@@ -385,7 +385,7 @@ for epoch in range(start_epoch,args.num_epochs+1):
         logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
         flowTrainer.train(epoch, net, flowNet, net_ema, flowNet_ema, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
 
-    acc, confidence = test(epoch,net, flowNet)
+    acc, confidence = test(epoch,net, flowNet, test_loader)
 
     scheduler.step()
     schedulerFlow.step()
