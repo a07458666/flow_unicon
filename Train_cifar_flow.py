@@ -49,7 +49,7 @@ parser.add_argument('--alpha_warmup', default=0.2, type=float, help='parameter f
 parser.add_argument('--alpha', default=4, type=float, help='parameter for Beta')
 parser.add_argument('--linear_u', default=340, type=float, help='weight for unsupervised loss')
 parser.add_argument('--lambda_u', default=3, type=float, help='weight for unsupervised loss')
-parser.add_argument('--lambda_p', default=30, type=float, help='pseudo lamb')
+parser.add_argument('--lambda_p', default=50, type=float, help='pseudo lamb')
 parser.add_argument('--linear_x', default=30, type=float, help='weight for unsupervised loss')
 parser.add_argument('--lambda_x', default=1, type=float, help='weight for supervised loss')
 parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
@@ -57,7 +57,7 @@ parser.add_argument('--Tu', default=0.5, type=float, help='sharpening temperatur
 parser.add_argument('--Tx', default=0.5, type=float, help='sharpening temperature')
 parser.add_argument('--num_epochs', default=350, type=int)
 parser.add_argument('--r', default=0.5, type=float, help='noise ratio')
-parser.add_argument('--d_u',  default=0.47, type=float)
+parser.add_argument('--d_u',  default=0.7, type=float)
 parser.add_argument('--tau', default=5, type=float, help='filtering coefficient')
 parser.add_argument('--metric', type=str, default = 'JSD', help='Comparison Metric')
 parser.add_argument('--seed', default=123)
@@ -78,6 +78,8 @@ parser.add_argument('--pseudo_std', default=0, type=float)
 parser.add_argument('--warmup_mixup', action='store_true')
 parser.add_argument('--ema', action='store_true', help = 'Exponential Moving Average')
 parser.add_argument('--decay', default=0.995, type=float, help='Exponential Moving Average decay')
+parser.add_argument('--ema_jsd', action='store_true', help = 'JSD Moving Average')
+parser.add_argument('--jsd_decay', default=0.9, type=float, help='Exponential Moving Average decay')
 
 args = parser.parse_args()
 
@@ -153,7 +155,7 @@ def train(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, l
             if args.ema:
                 with net_ema.average_parameters():
                     features_u11, outputs_u11 = net(inputs_u)
-                    features_u12, outputs_u12 = net(inputs_u2)    
+                    features_u12, outputs_u12 = net(inputs_u2)
             else:
                 features_u11, outputs_u11 = net(inputs_u)
                 features_u12, outputs_u12 = net(inputs_u2)
@@ -178,7 +180,7 @@ def train(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, l
             if args.ema:
                 with net_ema.average_parameters():
                     features_x, _  = net(inputs_x)
-                    features_x2, _ = net(inputs_x2)            
+                    features_x2, _ = net(inputs_x2)
             else:
                 features_x, _  = net(inputs_x)
                 features_x2, _ = net(inputs_x2)
@@ -271,7 +273,7 @@ def train(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, l
 
         # print("loss_CLR: ", args.lambda_c * loss_simCLR )
         ## Total Loss
-        loss = args.lambda_c * loss_simCLR + loss_nll_x.mean() + lamb_u * loss_nll_u.mean() + reg_f_var_loss #+ penalty #  Lx + lamb * Lu + 
+        loss = args.lambda_c * loss_simCLR + reg_f_var_loss + (-log_p2).mean() #loss_nll_x.mean() + lamb_u * loss_nll_u.mean() #+ penalty #  Lx + lamb * Lu 
 
         # Compute gradient and Do SGD step
         optimizer.zero_grad()
@@ -469,14 +471,21 @@ class Jensen_Shannon(nn.Module):
         m = (p+q)/2
         return 0.5*kl_divergence(p, m) + 0.5*kl_divergence(q, m)
 
-def Selection_Rate(prob):
+def Selection_Rate(prob, pre_threshold):
     threshold = torch.mean(prob)
     if threshold.item()>args.d_u:
         threshold = threshold - (threshold-torch.min(prob))/args.tau
+    if args.ema_jsd:
+        threshold = (args.jsd_decay * pre_threshold) + ((1 - args.jsd_decay) * threshold)
+    print("threshold : ", torch.mean(prob))
+    print("threshold(new) : ", threshold)
+    print("prob size : ", prob.size())
+    print("down :", torch.sum(prob<threshold).item())
+    print("up :", torch.sum(prob>threshold).item())
     SR = torch.sum(prob<threshold).item()/num_samples
-
-    if SR <= 1/args.num_class or SR >= 1.0:
-        new_SR = np.clip(SR, 1/args.num_class, 0.9)
+    print("SR :", SR)
+    if SR <= 0.1 or SR >= 0.9:
+        new_SR = np.clip(SR, 0.1, 0.9)
         print(f'WARNING: sample rate = {SR}, set to {new_SR}')
         SR = new_SR
     return SR, threshold
@@ -923,13 +932,14 @@ else:
 
 best_acc = 0
 
+jsd_threshold = 0.693
+
 ## Warmup and SSL-Training 
 for epoch in range(start_epoch,args.num_epochs+1):
     startTime = time.time() 
     test_loader = loader.run(0, 'test')
     eval_loader = loader.run(0, 'eval_train')   
     warmup_trainloader = loader.run(0,'warmup')
-    
     ## Warmup Stage 
     if epoch<warm_up:       
         warmup_trainloader = loader.run(0, 'warmup')
@@ -941,8 +951,8 @@ for epoch in range(start_epoch,args.num_epochs+1):
         ## Calculate JSD values and Filter Rate
         print("Calculate JSD")
         prob = Calculate_JSD(net, flowNet, num_samples)
-        SR , threshold = Selection_Rate(prob)
-        
+        SR , threshold = Selection_Rate(prob, jsd_threshold)
+        jsd_threshold = threshold
         print('Train Net\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
         logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
