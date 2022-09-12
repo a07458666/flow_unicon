@@ -284,8 +284,12 @@ class tiny_imagenet_dataset(Dataset):
                     img_path = '%s/'%val_img_files+entry[0]
                     self.val_labels[img_path] = int(dict_classes[entry[1]])
                     self.val_imgs.append(img_path)
-
-
+        
+        if self.mode == "labeled" or self.mode == "unlabeled":
+            print("noise_label ", noise_label.shape)
+            self.noise_label = np.array([noise_label[i] for i in pred_idx])
+            self.origin_label = np.array([train_label[i] for i in pred_idx])    # original label
+            self.pred_idx = pred_idx    
 
     def __getitem__(self, index):
         if self.mode=='labeled':
@@ -293,17 +297,19 @@ class tiny_imagenet_dataset(Dataset):
             target = self.train_labels.item()[img_path]
             prob = self.probability[index]
             image = Image.open(img_path).convert('RGB') 
+            o_target = self.origin_label[index]
 
             ## Weakly and Strongly Augmeneted Copies 
             img1 = self.transform[0](image)
             img2 = self.transform[1](image)
             img3 = self.transform[2](image)
             img4 = self.transform[3](image)
-            return img1, img2, img3, img4, target, prob
+            return img1, img2, img3, img4, target, prob, o_target
 
         elif self.mode=='unlabeled':
             img_path = self.train_imgs[index]
             image = Image.open(img_path).convert('RGB')
+            o_target = self.origin_label[index]
 
             ## Weakly and Strongly Augmeneted Copies 
             img1 = self.transform[0](image)
@@ -311,7 +317,7 @@ class tiny_imagenet_dataset(Dataset):
             img3 = self.transform[2](image)
             img4 = self.transform[3](image)
 
-            return img1, img2, img3, img4
+            return img1, img2, img3, img4, o_target
 
         elif self.mode=='all':
             img_path = self.train_imgs[index]

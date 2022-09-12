@@ -85,7 +85,7 @@ if (wandb != None):
     wandb.init(project="FlowUNICON", entity="andy-su", name=folder)
     wandb.config.update(args)
     wandb.define_metric("loss", summary="min")
-    wandb.define_metric("acc", summary="max")
+    wandb.define_metric("acc/test", summary="max")
 
 ## Test Accuracy
 def test(epoch,net,flowNet, test_loader):
