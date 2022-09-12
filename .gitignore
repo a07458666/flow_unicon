@@ -9,6 +9,7 @@
 *.pyc
 /lightning_logs/
 /.ipynb_checkpoints/
+*.npz
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
