@@ -80,6 +80,7 @@ parser.add_argument('--ema', action='store_true', help = 'Exponential Moving Ave
 parser.add_argument('--decay', default=0.995, type=float, help='Exponential Moving Average decay')
 parser.add_argument('--ema_jsd', action='store_true', help = 'JSD Moving Average')
 parser.add_argument('--jsd_decay', default=0.9, type=float, help='Exponential Moving Average decay')
+parser.add_argument('--thr', default=0.693, type=float, help='Threadhold JSD')
 
 args = parser.parse_args()
 
@@ -932,7 +933,7 @@ else:
 
 best_acc = 0
 
-jsd_threshold = 0.693
+jsd_threshold = args.thr
 
 ## Warmup and SSL-Training 
 for epoch in range(start_epoch,args.num_epochs+1):
