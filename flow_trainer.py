@@ -27,13 +27,14 @@ class FlowTrainer:
         self.mean = 0
         self.std = 0.2
         self.sample_n = 1
+        self.net_ema = None
         self.flowNet_ema = None
         self.warm_up = args.warm_up
         self.contrastive_criterion = SupConLoss()
         return
 
     ## For Standard Training 
-    def warmup_standard(self, epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, dataloader):
+    def warmup_standard(self, epoch, net, flownet, optimizer, optimizerFlow, dataloader):
         flownet.train()
         if self.args.fix == 'net':
             net.eval()
@@ -81,8 +82,8 @@ class FlowTrainer:
                 optimizerFlow.step()  
 
             if self.args.ema:
-                net_ema.update()
-                flowNet_ema.update()
+                self.net_ema.update()
+                self.flowNet_ema.update()
 
             ## wandb
             if (wandb != None):
@@ -99,7 +100,7 @@ class FlowTrainer:
                     %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
             sys.stdout.flush()
 
-    def train(self, epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader):
+    def train(self, epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader):
         net.train()
         flownet.train()
 
@@ -128,7 +129,7 @@ class FlowTrainer:
             with torch.no_grad():
                 # Label co-guessing of unlabeled samples
                 if self.args.ema:
-                    with net_ema.average_parameters():
+                    with self.net_ema.average_parameters():
                         features_u11, outputs_u11 = net(inputs_u)
                         features_u12, outputs_u12 = net(inputs_u2)    
                 else:
@@ -153,7 +154,7 @@ class FlowTrainer:
 
                 ## Label refinement
                 if self.args.ema:
-                    with net_ema.average_parameters():
+                    with self.net_ema.average_parameters():
                         features_x, _  = net(inputs_x)
                         features_x2, _ = net(inputs_x2)            
                 else:
@@ -233,7 +234,7 @@ class FlowTrainer:
             loss_nll_u = -log_p2[batch_size*2:]
 
             ## Total Loss
-            loss = self.args.lambda_c * loss_simCLR + loss_nll_x.mean() + lamb_u * loss_nll_u.mean() + reg_f_var_loss #+ penalty #  Lx + lamb * Lu + 
+            loss = self.args.lambda_c * loss_simCLR + reg_f_var_loss + (-log_p2).mean() #loss_nll_x.mean() + lamb_u * loss_nll_u.mean() #+ penalty #  Lx + lamb * Lu 
 
             # Compute gradient and Do SGD step
             optimizer.zero_grad()
@@ -249,8 +250,8 @@ class FlowTrainer:
                 optimizerFlow.step()  
 
             if self.args.ema:
-                net_ema.update()
-                flowNet_ema.update()
+                self.net_ema.update()
+                self.flowNet_ema.update()
 
             ## wandb
             if (wandb != None):
@@ -275,11 +276,13 @@ class FlowTrainer:
                 logMsg["label_quality/label_refine_JSD_mena"] = x_sources_refine.mean().item()
 
                 wandb.log(logMsg)
+            break
 
         sys.stdout.write('\r')
         sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Contrastive Loss:%.4f NLL(x) loss: %.2f NLL(u) loss: %.2f'
                 %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_simCLR.item(),  loss_nll_x.mean().item(), loss_nll_u.mean().item()))
         sys.stdout.flush()
+        
 
     ## Calculate JSD
     def Calculate_JSD(self, net, flowNet, num_samples, eval_loader):  
@@ -328,17 +331,17 @@ class FlowTrainer:
                 return approx21.detach().squeeze(1)
             return probs_mean
 
-    def testByFlow(self, net, flownet, net_ema, test_loader):
+    def testByFlow(self, net, flownet, test_loader):
         net.eval()
         flownet.eval()
         correct = 0
         total = 0
         prob_sum = 0
         with torch.no_grad():
-            for batch_idx, (inputs, targets) in enumerate(test_loader):
+            for batch_idx, (inputs, targets) in tqdm(enumerate(test_loader)):
                 inputs, targets = inputs.cuda(), targets.cuda()
                 if self.args.ema:
-                    with net_ema.average_parameters():
+                    with self.net_ema.average_parameters():
                         feature, _ = net(inputs)
                 else:
                        feature, _ = net(inputs)
@@ -379,8 +382,9 @@ class FlowTrainer:
         pu_onehot = self.torch_onehot(pu_label, pu.shape[1]).detach()
         return pu_onehot
 
-    def setEma(self, ema):
-        self.flowNet_ema = ema
+    def setEma(self, net_ema, flow_ema):
+        self.net_ema = net_ema
+        self.flowNet_ema = flow_ema
         return
     
     def print_label_status(self, targets_x, targets_u, labels_x_o, labels_u_o, epoch):

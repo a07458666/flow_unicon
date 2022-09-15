@@ -437,8 +437,6 @@ class Jensen_Shannon(nn.Module):
 
 def Selection_Rate(prob, pre_threshold):
     threshold = torch.mean(prob)
-    if threshold.item()>args.d_u:
-        threshold = threshold - (threshold-torch.min(prob))/args.tau
     if args.ema_jsd:
         threshold = (args.jsd_decay * pre_threshold) + ((1 - args.jsd_decay) * threshold)
     print("threshold : ", torch.mean(prob))

@@ -147,6 +147,7 @@ class tiny_imagenet_dataset(Dataset):
         self.ratio = ratio
         self.noise_mode = noise_mode
 
+        root_dir = './data/tiny-imagenet-200'
         ### Get the instances and check if it is right
         data_folder = './data/tiny-imagenet-200/train/'
         train_instances, dict_classes = make_dataset(data_folder, extensions = IMG_EXTENSIONS)
@@ -199,10 +200,7 @@ class tiny_imagenet_dataset(Dataset):
             noisy_index = []
 
             ## Check the Noise Type
-            if noise_mode == 'instance_dependent':
-                noise_label, actual_noise_rate, noise_idx = noisify_instance(self.train_images, self.true_labels, noise_rate=ratio)
-
-            elif noise_mode=="asym":
+            if noise_mode=="asym":
                 noiselabel, noise_rate = noisify('tiny_imagenet', num_class, np.array(train_label), 'pairflip', ratio, 0)
                 num = 0
                 for kk in self.train_images:
@@ -235,7 +233,7 @@ class tiny_imagenet_dataset(Dataset):
 
         ## Indices for Clean Samples 
         save_file = "Tiny_ImageNet_" + str(noise_mode) + "_" +str(ratio) + ".npz" 
-
+        save_file = os.path.join(root_dir, save_file)
         ## For Warmup and JSD Calculation
         if self.mode == 'all':
             self.train_labels = noise_label
@@ -263,6 +261,7 @@ class tiny_imagenet_dataset(Dataset):
             pred_idx = [int(x) for x in list(pred_idx)]
             np.savez(save_file, index = pred_idx)
             self.train_imgs = np.array(self.train_images)[pred_idx]
+            self.origin_prob = torch.clone(probability)
             probability[probability<0.5] = 0
             self.probability = [1-probability[i] for i in pred_idx]
             print("%s data has a size of %d"%(self.mode, len(self.train_imgs)))
@@ -286,10 +285,15 @@ class tiny_imagenet_dataset(Dataset):
                     self.val_imgs.append(img_path)
         
         if self.mode == "labeled" or self.mode == "unlabeled":
-            print("noise_label ", noise_label.shape)
-            self.noise_label = np.array([noise_label[i] for i in pred_idx])
-            self.origin_label = np.array([train_label[i] for i in pred_idx])    # original label
-            self.pred_idx = pred_idx    
+            self.noise_label = []
+            self.origin_label = []
+            self.pred_idx = pred_idx 
+            for kk in self.train_images:
+                self.noise_label.append(noise_label.item()[kk])
+                self.origin_label.append(self.true_labels[kk])
+            self.noise_label = np.array(self.noise_label)
+            self.origin_label = np.array(self.origin_label)
+            
 
     def __getitem__(self, index):
         if self.mode=='labeled':
@@ -392,7 +396,7 @@ class tinyImagenet_dataloader():
             warmup_dataset = tiny_imagenet_dataset(SR, self.root,transform=self.transforms["warmup"], mode='all', ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file)
             warmup_loader = DataLoader(
                 dataset=warmup_dataset, 
-                batch_size=self.batch_size*8,
+                batch_size=self.batch_size*2,
                 shuffle=True,
                 num_workers=self.num_workers)  
             return warmup_loader
@@ -401,14 +405,14 @@ class tinyImagenet_dataloader():
             labeled_dataset = tiny_imagenet_dataset(SR, self.root,transform=self.transforms["labeled"], mode='labeled',  ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file, pred=pred, probability=prob,paths=paths)
             labeled_loader = DataLoader(
                 dataset=labeled_dataset, 
-                batch_size=self.batch_size,
+                batch_size=int(self.batch_size * (2 * SR)),
                 shuffle=True, drop_last= True,
                 num_workers=self.num_workers)
 
             unlabeled_dataset = tiny_imagenet_dataset(SR, self.root,transform=self.transforms["unlabeled"], mode='unlabeled',  ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file, pred=pred, probability=prob,paths=paths)
             unlabeled_loader = DataLoader(
                 dataset=unlabeled_dataset, 
-                batch_size=int(self.batch_size),
+                batch_size=int(self.batch_size * (2 * (1 - SR))),
                 shuffle=True, drop_last= True,
                 num_workers=self.num_workers)   
             return labeled_loader,unlabeled_loader

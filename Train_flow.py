@@ -19,10 +19,7 @@ import torchvision.models as models
 # 
 import time
 import collections.abc
-from collections.abc import MutableMapping
 from flow_trainer import FlowTrainer
-from flowModule.utils import standard_normal_logprob, linear_rampup
-from flowModule.jensen_shannon import js_distance
 from tqdm import tqdm
 from torch_ema import ExponentialMovingAverage
 from config import argumentParse
@@ -60,8 +57,9 @@ if args.dataset== 'cifar10' or args.dataset== 'cifar100':
 elif args.dataset=='TinyImageNet':
     from PreResNet_tiny import *
     from dataloader_tiny import tinyImagenet_dataloader as dataloader
-
-
+elif args.dataset=="Clothing1M":
+    from PreResNet_source import *
+    import dataloader_clothing1M as dataloader
 
 ## Checkpoint Location
 folder = args.dataset + '_' + args.noise_mode + '_' + str(args.ratio)  + '_flow_' + args.name
@@ -89,7 +87,7 @@ if (wandb != None):
 
 ## Test Accuracy
 def test(epoch,net,flowNet, test_loader):
-    acc, confidence = flowTrainer.testByFlow(net, flowNet, net_ema, test_loader)
+    acc, confidence = flowTrainer.testByFlow(net, flowNet, test_loader)
     print("\n| Test Epoch #%d\t Accuracy: %.2f%%\n" %(epoch,acc))  
     
     ## wandb
@@ -103,10 +101,16 @@ def test(epoch,net,flowNet, test_loader):
     test_log.flush()  
     return acc, confidence
 
-def Selection_Rate(prob):
+def Selection_Rate(prob, pre_threshold):
     threshold = torch.mean(prob)
     SR = torch.sum(prob<threshold).item()/args.num_samples
-
+    if args.ema_jsd:
+        threshold = (args.jsd_decay * pre_threshold) + ((1 - args.jsd_decay) * threshold)
+    print("threshold : ", torch.mean(prob))
+    print("threshold(new) : ", threshold)
+    print("prob size : ", prob.size())
+    print("down :", torch.sum(prob<threshold).item())
+    print("up :", torch.sum(prob>threshold).item())
     if SR <= 1/args.num_class or SR >= 1.0:
         new_SR = np.clip(SR, 1/args.num_class, 0.9)
         print(f'WARNING: sample rate = {SR}, set to {new_SR}')
@@ -338,7 +342,7 @@ schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, args.num_epo
 if args.ema:
     net_ema = ExponentialMovingAverage(net.parameters(), decay=args.decay)
     flowNet_ema = ExponentialMovingAverage(flowNet.parameters(), decay=args.decay)
-    flowTrainer.setEma(flowNet_ema)
+    flowTrainer.setEma(net_ema, flowNet_ema)
 else:
     net_ema = None
     flowNet_ema = None
@@ -359,6 +363,7 @@ else:
     start_epoch = 0
 
 best_acc = 0
+jsd_threshold = args.thr
 
 ## Warmup and SSL-Training 
 for epoch in range(start_epoch,args.num_epochs+1):
@@ -372,20 +377,20 @@ for epoch in range(start_epoch,args.num_epochs+1):
         warmup_trainloader = loader.run(0, 'warmup')
 
         print('Warmup Model')
-        flowTrainer.warmup_standard(epoch, net, flowNet, net_ema, flowNet_ema, optimizer, optimizerFlow, warmup_trainloader)   
+        flowTrainer.warmup_standard(epoch, net, flowNet, optimizer, optimizerFlow, warmup_trainloader)   
     
     else:
         ## Calculate JSD values and Filter Rate
         print("Calculate JSD")
         prob = flowTrainer.Calculate_JSD(net, flowNet, args.num_samples, eval_loader)
-        SR , threshold = Selection_Rate(prob)
-        
+        SR , threshold = Selection_Rate(prob, jsd_threshold)
+        jsd_threshold = threshold
         print('Train Net\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
         logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
-        flowTrainer.train(epoch, net, flowNet, net_ema, flowNet_ema, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
+        flowTrainer.train(epoch, net, flowNet, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
 
-    acc, confidence = test(epoch,net, flowNet, test_loader)
+    acc, confidence = test(epoch, net, flowNet, test_loader)
 
     scheduler.step()
     schedulerFlow.step()

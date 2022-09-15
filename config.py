@@ -34,7 +34,7 @@ def argumentParse():
     parser.add_argument('--Tu', default=0.5, type=float, help='sharpening temperature')
     parser.add_argument('--Tx', default=0.5, type=float, help='sharpening temperature')
     parser.add_argument('--num_epochs', default=350, type=int)
-    parser.add_argument('--ratio', default=0.2 , type=float, help='noise ratio')
+    parser.add_argument('-r', '--ratio', default=0.2 , type=float, help='noise ratio')
     parser.add_argument('--seed', default=123)
     parser.add_argument('--gpuid', default=0, type=int)
     parser.add_argument('--resume', action='store_true', help = 'Resume from the warmup checkpoint')
@@ -48,14 +48,15 @@ def argumentParse():
     parser.add_argument('--pseudo_std', default=0, type=float)
     parser.add_argument('--warmup_mixup', action='store_true')
     parser.add_argument('--ema', action='store_true', help = 'Exponential Moving Average')
-    parser.add_argument('--decay', default=0.995, type=float, help='Exponential Moving Average decay')
+    parser.add_argument('--decay', default=0.9, type=float, help='Exponential Moving Average decay')
     parser.add_argument('--warm_up', default=10, type=int)
     parser.add_argument('--num_samples', default=50000, type=int)
     parser.add_argument('--ema_jsd', action='store_true', help = 'JSD Moving Average')
     parser.add_argument('--jsd_decay', default=0.9, type=float, help='Exponential Moving Average decay')
     parser.add_argument('--thr', default=0.693, type=float, help='Threadhold JSD')
     parser.add_argument('--clip_grad', action='store_true', help = 'cliping grad')
-    
+    parser.add_argument('--pretrained', action='store_true', help = 'pretrained(Clothing1M)')
+
 
     # load yaml
     _add_args_from_yaml(parser)
