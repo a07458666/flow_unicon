@@ -616,7 +616,7 @@ print('| Building net')
 net1 = create_model()
 net2 = create_model()
 
-cudnn.benchmark = True
+cudnn.benchmark = True 
 
 ## Semi-Supervised Loss
 criterion  = SemiLoss()

@@ -43,6 +43,7 @@ except ImportError:
 args = argumentParse()
 print("args : ",vars(args))
 
+
 ## GPU Setup
 torch.cuda.set_device(args.gpuid)
 random.seed(args.seed)
@@ -115,7 +116,7 @@ def train(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, l
             if args.ema:
                 with net_ema.average_parameters():
                     features_u11, outputs_u11 = net(inputs_u)
-                    features_u12, outputs_u12 = net(inputs_u2)    
+                    features_u12, outputs_u12 = net(inputs_u2)
             else:
                 features_u11, outputs_u11 = net(inputs_u)
                 features_u12, outputs_u12 = net(inputs_u2)
@@ -140,7 +141,7 @@ def train(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, l
             if args.ema:
                 with net_ema.average_parameters():
                     features_x, _  = net(inputs_x)
-                    features_x2, _ = net(inputs_x2)            
+                    features_x2, _ = net(inputs_x2)
             else:
                 features_x, _  = net(inputs_x)
                 features_x2, _ = net(inputs_x2)
@@ -233,13 +234,17 @@ def train(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, l
 
         # print("loss_CLR: ", args.lambda_c * loss_simCLR )
         ## Total Loss
-        loss = args.lambda_c * loss_simCLR + loss_nll_x.mean() + lamb_u * loss_nll_u.mean() + reg_f_var_loss #+ penalty #  Lx + lamb * Lu + 
-
+        loss = args.lambda_c * loss_simCLR + reg_f_var_loss + (-log_p2).mean() #loss_nll_x.mean() + lamb_u * loss_nll_u.mean() #+ penalty #  Lx + lamb * Lu 
+        if args.clip_grad:
+            loss = clipping_grad(loss)
+        
         # Compute gradient and Do SGD step
         optimizer.zero_grad()
         optimizerFlow.zero_grad()
         loss.backward()
-
+        if args.clip_grad:
+            torch.nn.utils.clip_grad_value_(net.parameters(), 4)
+            torch.nn.utils.clip_grad_value_(flownet.parameters(), 4)
         if args.fix == 'flow':
             optimizer.step()
         elif args.fix == 'net':
@@ -430,14 +435,21 @@ class Jensen_Shannon(nn.Module):
         m = (p+q)/2
         return 0.5*kl_divergence(p, m) + 0.5*kl_divergence(q, m)
 
-def Selection_Rate(prob):
+def Selection_Rate(prob, pre_threshold):
     threshold = torch.mean(prob)
     if threshold.item()>args.d_u:
         threshold = threshold - (threshold-torch.min(prob))/args.tau
+    if args.ema_jsd:
+        threshold = (args.jsd_decay * pre_threshold) + ((1 - args.jsd_decay) * threshold)
+    print("threshold : ", torch.mean(prob))
+    print("threshold(new) : ", threshold)
+    print("prob size : ", prob.size())
+    print("down :", torch.sum(prob<threshold).item())
+    print("up :", torch.sum(prob>threshold).item())
     SR = torch.sum(prob<threshold).item()/num_samples
-
-    if SR <= 1/args.num_class or SR >= 1.0:
-        new_SR = np.clip(SR, 1/args.num_class, 0.9)
+    print("SR :", SR)
+    if SR <= 0.1 or SR >= 0.9:
+        new_SR = np.clip(SR, 0.1, 0.9)
         print(f'WARNING: sample rate = {SR}, set to {new_SR}')
         SR = new_SR
     return SR, threshold
@@ -446,6 +458,20 @@ def Dist_Func(pred, target):
     JS_dist = Jensen_Shannon()
     dist = JS_dist(pred, F.one_hot(target, num_classes = args.num_class))
     return dist
+
+D_GRAD_CLIP = 1e14
+def clipping_grad(loss):
+    if loss.requires_grad:
+        def hook(grad):
+            if (wandb != None):
+                logMsg = {}
+                logMsg["epoch"] = epoch
+                logMsg["max_grads"] =  float(grad.abs().max().cpu().numpy())
+                wandb.log(logMsg)
+            clipped_grad = grad.clamp(min=-D_GRAD_CLIP, max=D_GRAD_CLIP)
+            return clipped_grad
+        loss.register_hook(hook)
+    return loss
 
 ## Calculate JSD
 def Calculate_JSD(net, flowNet, num_samples):  
@@ -876,13 +902,14 @@ else:
 
 best_acc = 0
 
+jsd_threshold = args.thr
+
 ## Warmup and SSL-Training 
 for epoch in range(start_epoch,args.num_epochs+1):
     startTime = time.time() 
     test_loader = loader.run(0, 'test')
     eval_loader = loader.run(0, 'eval_train')   
     warmup_trainloader = loader.run(0,'warmup')
-    
     ## Warmup Stage 
     if epoch<warm_up:       
         warmup_trainloader = loader.run(0, 'warmup')
@@ -894,8 +921,8 @@ for epoch in range(start_epoch,args.num_epochs+1):
         ## Calculate JSD values and Filter Rate
         print("Calculate JSD")
         prob = Calculate_JSD(net, flowNet, num_samples)
-        SR , threshold = Selection_Rate(prob)
-        
+        SR , threshold = Selection_Rate(prob, jsd_threshold)
+        jsd_threshold = threshold
         print('Train Net\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
         logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)

@@ -51,6 +51,10 @@ def argumentParse():
     parser.add_argument('--decay', default=0.995, type=float, help='Exponential Moving Average decay')
     parser.add_argument('--warm_up', default=10, type=int)
     parser.add_argument('--num_samples', default=50000, type=int)
+    parser.add_argument('--ema_jsd', action='store_true', help = 'JSD Moving Average')
+    parser.add_argument('--jsd_decay', default=0.9, type=float, help='Exponential Moving Average decay')
+    parser.add_argument('--thr', default=0.693, type=float, help='Threadhold JSD')
+    parser.add_argument('--clip_grad', action='store_true', help = 'cliping grad')
     
 
     # load yaml
