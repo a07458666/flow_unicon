@@ -228,10 +228,13 @@ class FlowTrainer:
             delta_log_p2 = delta_log_p2.view(flow_mixed_target.size()[0], flow_mixed_target.shape[1], 1).sum(1)
             log_p2 = (approx2 - delta_log_p2)
 
-            lamb_u = linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.linear_u, self.args.lambda_u) + 1
+            lamb_u = linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.linear_u, self.args.lambda_u)
             
             loss_nll_x = -log_p2[:batch_size*2]
             loss_nll_u = -log_p2[batch_size*2:]
+
+            if (self.args.lambda_u > 1):
+                log_p2[batch_size*2:] *= lamb_u
 
             ## Total Loss
             loss = self.args.lambda_c * loss_simCLR + reg_f_var_loss + (-log_p2).mean() #loss_nll_x.mean() + lamb_u * loss_nll_u.mean() #+ penalty #  Lx + lamb * Lu 

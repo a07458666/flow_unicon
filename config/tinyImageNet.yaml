@@ -5,10 +5,11 @@ num_epochs: 400
 num_class: 200
 lr: 0.05
 lr_f: 5e-5
-batch_size: 128
+batch_size: 64
 warm_up: 20
 num_samples: 100000
 lambda_p: 100
 Tu: 0.2
 Tx: 0.2
 alpha: 2
+ema: true

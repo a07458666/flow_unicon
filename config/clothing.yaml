@@ -12,3 +12,4 @@ lambda_p: 100
 Tu: 0.2
 Tx: 0.2
 pretrained: true
+ema: true
