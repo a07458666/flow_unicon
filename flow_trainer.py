@@ -231,7 +231,7 @@ class FlowTrainer:
             
             if self.args.w_ce:
                 ## Combined Loss
-                Lx, Lu, lamb = self.criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
+                Lx, Lu, lamb = self.criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, self.warm_up)
                 
                 ## Regularization
                 prior = torch.ones(args.num_class)/args.num_class
