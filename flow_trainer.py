@@ -376,10 +376,11 @@ class FlowTrainer:
         flow_outputs_u12 = self.predict(flownet, features_u12, std)
 
         pu = (flow_outputs_u11 + flow_outputs_u12) / 2
-
-        pu_label = torch.distributions.Categorical(pu).sample()
-        pu_onehot = self.torch_onehot(pu_label, pu.shape[1]).detach()
-        return pu_onehot
+        
+        return pu
+        # pu_label = torch.distributions.Categorical(pu).sample()
+        # pu_onehot = self.torch_onehot(pu_label, pu.shape[1]).detach()
+        # return pu_onehot
 
     def setEma(self, net, flowNet):
         self.net_ema = ExponentialMovingAverage(net.parameters(), decay=self.args.decay)
