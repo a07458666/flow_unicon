@@ -27,8 +27,6 @@ class FlowTrainer:
         self.mean = 0
         self.std = 0.2
         self.sample_n = 1
-        self.net_ema = None
-        self.flowNet_ema = None
         self.warm_up = args.warm_up
         self.contrastive_criterion = SupConLoss()
         return
@@ -140,7 +138,7 @@ class FlowTrainer:
                 pu_flow = self.get_pseudo_label(flownet, features_u11, features_u12, std = self.args.pseudo_std)
 
                 pu_net = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1)) / 2
-                # log_pu(pu_flow, pu_net, labels_u_o)
+                self.log_pu(pu_flow, pu_net, labels_u_o, epoch)
                 # pu_flow = pu_flow**(1/2)
                 # pu = (pu_flow + pu_net) / 2
                 pu = pu_flow
@@ -194,7 +192,6 @@ class FlowTrainer:
             features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
 
             loss_simCLR = self.contrastive_criterion(features)
-
 
             all_inputs  = torch.cat([inputs_x3, inputs_x4, inputs_u3, inputs_u4], dim=0)
             all_targets = torch.cat([targets_x, targets_x, targets_u, targets_u], dim=0)
@@ -279,7 +276,6 @@ class FlowTrainer:
                 logMsg["label_quality/label_refine_JSD_mena"] = x_sources_refine.mean().item()
 
                 wandb.log(logMsg)
-            break
 
         sys.stdout.write('\r')
         sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Contrastive Loss:%.4f NLL(x) loss: %.2f NLL(u) loss: %.2f'
@@ -385,9 +381,9 @@ class FlowTrainer:
         pu_onehot = self.torch_onehot(pu_label, pu.shape[1]).detach()
         return pu_onehot
 
-    def setEma(self, net_ema, flow_ema):
-        self.net_ema = net_ema
-        self.flowNet_ema = flow_ema
+    def setEma(self, net, flowNet):
+        self.net_ema = ExponentialMovingAverage(net.parameters(), decay=self.args.decay)
+        self.flowNet_ema = ExponentialMovingAverage(flowNet.parameters(), decay=self.args.decay)
         return
     
     def print_label_status(self, targets_x, targets_u, labels_x_o, labels_u_o, epoch):
@@ -420,3 +416,43 @@ class FlowTrainer:
             logMsg["label_count/refine_labels_x"] =  max(refine_labels_x)
             logMsg["label_count/target_labels_x"] =  max(target_labels_x)
             wandb.log(logMsg)
+
+    def log_pu(self, pu_flow, pu_net, gt, epoch):
+        prob_flow, predicted_flow = torch.max(pu_flow, 1)
+        prob_net, predicted_net = torch.max(pu_net, 1)
+
+        total = gt.size(0)
+        correct_flow = predicted_flow.eq(gt).cpu().sum().item()  
+        prob_sum_flow = prob_flow.cpu().sum().item()
+
+        correct_net = predicted_net.eq(gt).cpu().sum().item()  
+        prob_sum_net = prob_net.cpu().sum().item()
+
+        acc_flow = 100.*correct_flow/total
+        confidence_flow = prob_sum_flow/total
+
+        acc_net = 100.*correct_net/total
+        confidence_net = prob_sum_net/total
+
+        # pu_log.write('\nepoch : ' + str(epoch))
+        # pu_log.write('\n acc_flow : ' + str(acc_flow))
+        # pu_log.write('\n confidence_flow : ' + str(confidence_flow))
+        
+        # pu_log.write('\n acc_net : ' + str(acc_net))
+        # pu_log.write('\n confidence_net : ' + str(confidence_net))
+
+        # pu_log.write('\n pu_flow : ' + str(pu_flow[:5].cpu().numpy()))
+        # pu_log.write('\n pu_net : ' + str(pu_net[:5].cpu().numpy()))
+        # pu_log.write('\n gt : ' + str(gt[:5].cpu().numpy()))
+        
+        # pu_log.flush()
+
+        if (wandb != None):
+            logMsg = {}
+            logMsg["epoch"] = epoch
+            logMsg["pseudo/acc_flow"] = acc_flow
+            logMsg["pseudo/confidence_flow"] = confidence_flow
+            logMsg["pseudo/acc_net"] = acc_net
+            logMsg["pseudo/confidence_net"] = confidence_net
+            wandb.log(logMsg)
+        return

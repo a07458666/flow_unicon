@@ -21,7 +21,6 @@ import time
 import collections.abc
 from flow_trainer import FlowTrainer
 from tqdm import tqdm
-from torch_ema import ExponentialMovingAverage
 from config import argumentParse
 
 try:
@@ -82,8 +81,13 @@ loss_log = open(model_save_loc +'/loss_batch.txt','w')
 if (wandb != None):
     wandb.init(project="FlowUNICON", entity="andy-su", name=folder)
     wandb.config.update(args)
-    wandb.define_metric("loss", summary="min")
     wandb.define_metric("acc/test", summary="max")
+    wandb.define_metric("loss/nll", summary="min")
+    wandb.define_metric("loss/nll_max", summary="min")
+    wandb.define_metric("loss/nll_min", summary="min")
+    wandb.define_metric("loss/nll_var", summary="min")
+    
+    wandb.run.log_code(".")
 
 ## Test Accuracy
 def test(epoch,net,flowNet, test_loader):
@@ -211,46 +215,6 @@ def create_model():
     model = model.cuda()
     return model
 
-def log_pu(pu_flow, pu_net, gt):
-    prob_flow, predicted_flow = torch.max(pu_flow, 1)
-    prob_net, predicted_net = torch.max(pu_net, 1)
-
-    total = gt.size(0)
-    correct_flow = predicted_flow.eq(gt).cpu().sum().item()  
-    prob_sum_flow = prob_flow.cpu().sum().item()
-
-    correct_net = predicted_net.eq(gt).cpu().sum().item()  
-    prob_sum_net = prob_net.cpu().sum().item()
-
-    acc_flow = 100.*correct_flow/total
-    confidence_flow = prob_sum_flow/total
-
-    acc_net = 100.*correct_net/total
-    confidence_net = prob_sum_net/total
-
-    pu_log.write('\nepoch : ' + str(epoch))
-    pu_log.write('\n acc_flow : ' + str(acc_flow))
-    pu_log.write('\n confidence_flow : ' + str(confidence_flow))
-    
-    pu_log.write('\n acc_net : ' + str(acc_net))
-    pu_log.write('\n confidence_net : ' + str(confidence_net))
-
-    pu_log.write('\n pu_flow : ' + str(pu_flow[:5].cpu().numpy()))
-    pu_log.write('\n pu_net : ' + str(pu_net[:5].cpu().numpy()))
-    pu_log.write('\n gt : ' + str(gt[:5].cpu().numpy()))
-    
-    pu_log.flush()
-
-    if (wandb != None):
-        logMsg = {}
-        logMsg["epoch"] = epoch
-        logMsg["pseudo/acc_flow"] = acc_flow
-        logMsg["pseudo/confidence_flow"] = confidence_flow
-        logMsg["pseudo/acc_net"] = acc_net
-        logMsg["pseudo/confidence_net"] = confidence_net
-        wandb.log(logMsg)
-    return
-
 def print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, batch_idx):
     label = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
     refine_labels_x = [0] * args.num_class
@@ -294,7 +258,7 @@ def save_model(net, flowNet, epoch, model_name, model_name_flow, acc = 0):
         'Noise_mode': args.noise_mode,
         'Accuracy': acc,
         'Pytorch version': '1.4.0',
-        'Dataset': 'TinyImageNet',
+        'Dataset': args.dataset,
         'Batch Size': args.batch_size,
         'epoch': epoch,
     }
@@ -306,7 +270,7 @@ def save_model(net, flowNet, epoch, model_name, model_name_flow, acc = 0):
         'Loss Function': 'log-likelihood',
         'Optimizer': 'SGD',
         'Noise_mode': args.noise_mode,
-        'Dataset': 'TinyImageNet',
+        'Dataset': args.dataset,
         'Batch Size': args.batch_size,
         'epoch': epoch,
     }
@@ -328,6 +292,7 @@ net = create_model()
 # flow model
 flowTrainer = FlowTrainer(args)
 flowNet = flowTrainer.create_model()
+flowTrainer.setEma(net, flowNet)
 
 cudnn.benchmark = True
 
@@ -338,14 +303,6 @@ optimizerFlow = optim.SGD(flowNet.parameters(), lr=args.lr_f, momentum=0.9, weig
 
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epochs, args.lr / 100)
 schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, args.num_epochs, args.lr_f / 100)
-
-if args.ema:
-    net_ema = ExponentialMovingAverage(net.parameters(), decay=args.decay)
-    flowNet_ema = ExponentialMovingAverage(flowNet.parameters(), decay=args.decay)
-    flowTrainer.setEma(net_ema, flowNet_ema)
-else:
-    net_ema = None
-    flowNet_ema = None
 
 ## Resume from the warmup checkpoint 
 model_name = 'Net_warmup.pth'
