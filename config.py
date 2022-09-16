@@ -56,6 +56,7 @@ def argumentParse():
     parser.add_argument('--thr', default=0.693, type=float, help='Threadhold JSD')
     parser.add_argument('--clip_grad', action='store_true', help = 'cliping grad')
     parser.add_argument('--pretrained', action='store_true', help = 'pretrained(Clothing1M)')
+    parser.add_argument('--w_ce', action='store_true', help = 'train with cross entrioy')
 
 
     # load yaml

@@ -19,6 +19,12 @@ except ImportError:
     wandb = None
     logger.info("Install Weights & Biases for experiment logging via 'pip install wandb' (recommended)")
 
+class SemiLoss(object):
+    def __call__(self, outputs_x, targets_x, outputs_u, targets_u, epoch, warm_up):
+        probs_u = torch.softmax(outputs_u, dim=1)
+        Lx = -torch.mean(torch.sum(F.log_softmax(outputs_x, dim=1) * targets_x, dim=1))
+        Lu = torch.mean((probs_u - targets_u)**2)
+        return Lx, Lu, linear_rampup(epoch,warm_up)
 
 class FlowTrainer:
     def __init__(self, args) -> None:
@@ -29,6 +35,15 @@ class FlowTrainer:
         self.sample_n = 1
         self.warm_up = args.warm_up
         self.contrastive_criterion = SupConLoss()
+        
+        ## CE Loss Functions
+        if self.args.w_ce:
+            self.CE       = nn.CrossEntropyLoss(reduction='none')
+            self.CEloss   = nn.CrossEntropyLoss()
+            self.MSE_loss = nn.MSELoss(reduction= 'none')
+            self.criterion  = SemiLoss()
+        if self.args.noise_mode=='asym':
+            self.conf_penalty = NegEntropy()
         return
 
     ## For Standard Training 
@@ -65,7 +80,16 @@ class FlowTrainer:
             log_p2 = (approx2 - delta_log_p2)
             loss_nll = -log_p2.mean()
             # == flow end ===
-            L = loss_nll
+
+            if self.args.w_ce:
+                loss_ce = self.CEloss(outputs, labels)
+                if self.args.noise_mode=='asym':     # Penalize confident prediction for asymmetric noise
+                    penalty = self.conf_penalty(outputs)
+                    L = loss_ce + penalty + loss_nll
+                else:   
+                    L = loss_ce + loss_nll
+            else:
+                L = loss_nll
 
             optimizer.zero_grad()
             optimizerFlow.zero_grad()
@@ -139,9 +163,11 @@ class FlowTrainer:
 
                 pu_net = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1)) / 2
                 self.log_pu(pu_flow, pu_net, labels_u_o, epoch)
-                # pu_flow = pu_flow**(1/2)
-                # pu = (pu_flow + pu_net) / 2
-                pu = pu_flow
+
+                if self.args.w_ce:
+                    pu = (pu_flow + pu_net) / 2
+                else:
+                    pu = pu_flow
                 
                 lamb_Tu = (1 - linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.lambda_p, self.args.Tu))
 
@@ -153,25 +179,25 @@ class FlowTrainer:
                 ## Label refinement
                 if self.args.ema:
                     with self.net_ema.average_parameters():
-                        features_x, _  = net(inputs_x)
-                        features_x2, _ = net(inputs_x2)            
+                        features_x, outputs_x1  = net(inputs_x)
+                        features_x2, outputs_x2 = net(inputs_x2)            
                 else:
-                    features_x, _  = net(inputs_x)
-                    features_x2, _ = net(inputs_x2)
+                    features_x, outputs_x1 = net(inputs_x)
+                    features_x2, outputs_x2 = net(inputs_x2)
 
-                px_o = self.get_pseudo_label(flownet, features_x, features_x2)
-                # flow_outputs_x = flowTrainer.predict(flownet, features_x)
-                # flow_outputs_x2 = flowTrainer.predict(flownet, features_x2)
-                # px = (flow_outputs_x + flow_outputs_x2) / 2   
-                px = w_x*labels_x + (1-w_x)*px_o
+                px_flow = self.get_pseudo_label(flownet, features_x, features_x2)
+                px_net = (torch.softmax(outputs_x1, dim=1) + torch.softmax(outputs_x2, dim=1)) / 2
+                if self.args.w_ce:
+                    px = (px_flow + px_net) / 2
+                else:
+                    px = px_flow
+                    
+                px_mix = w_x*labels_x + (1-w_x)*px
 
-                ptx = px**(1/self.args.Tx)    ## Temparature sharpening 
+                ptx = px_mix**(1/self.args.Tx)    ## Temparature sharpening 
                             
                 targets_x = ptx / ptx.sum(dim=1, keepdim=True)           
                 targets_x = targets_x.detach()
-                # print("targets_x : ", targets_x[:10])
-                # print("targets_u : ", targets_u[:10])
-                # targets_x = labels_x
 
                 self.print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, epoch)
 
@@ -180,9 +206,6 @@ class FlowTrainer:
                 u_sources_pseudo = js_distance(targets_u, labels_u_o, self.args.num_class)
                 x_sources_origin = js_distance(labels_x, labels_x_o, self.args.num_class)
                 x_sources_refine = js_distance(targets_x, labels_x_o, self.args.num_class)
-                # print("x_sources_origin :", x_sources_origin)
-                # print("labels_x :", labels_x[:20])
-                # print("labels_x_o :", labels_x_o[:20])
 
             ## Unsupervised Contrastive Loss
             f1, _ = net(inputs_u3)
@@ -203,17 +226,18 @@ class FlowTrainer:
             # Regularization feature var
             reg_f_var_loss = torch.clamp(1-torch.sqrt(flow_feature.var(dim=0) + 1e-10), min=0).mean()
             
-            # logits_x = logits[:batch_size*2]
-            # logits_u = logits[batch_size*2:]        
+            logits_x = logits[:batch_size*2]
+            logits_u = logits[batch_size*2:]        
             
-            ## Combined Loss
-            # Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
-            
-            ## Regularization
-            # prior = torch.ones(args.num_class)/args.num_class
-            # prior = prior.cuda()        
-            # pred_mean = torch.softmax(logits, dim=1).mean(0)
-            # penalty = torch.sum(prior*torch.log(prior/pred_mean))
+            if self.args.w_ce:
+                ## Combined Loss
+                Lx, Lu, lamb = self.criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
+                
+                ## Regularization
+                prior = torch.ones(args.num_class)/args.num_class
+                prior = prior.cuda()        
+                pred_mean = torch.softmax(logits, dim=1).mean(0)
+                penalty = torch.sum(prior*torch.log(prior/pred_mean))
 
             ## Flow loss
             flow_feature = F.normalize(flow_feature, dim=1)
@@ -234,7 +258,10 @@ class FlowTrainer:
                 log_p2[batch_size*2:] *= lamb_u
 
             ## Total Loss
-            loss = self.args.lambda_c * loss_simCLR + reg_f_var_loss + (-log_p2).mean() #loss_nll_x.mean() + lamb_u * loss_nll_u.mean() #+ penalty #  Lx + lamb * Lu 
+            if self.args.w_ce:
+                loss = self.args.lambda_c * loss_simCLR + reg_f_var_loss + (-log_p2).mean() + Lx + lamb * Lu + penalty
+            else:
+                loss = self.args.lambda_c * loss_simCLR + reg_f_var_loss + (-log_p2).mean()
 
             # Compute gradient and Do SGD step
             optimizer.zero_grad()
@@ -274,6 +301,10 @@ class FlowTrainer:
                 logMsg["label_quality/unlabel_pseudo_JSD_mean"] = u_sources_pseudo.mean().item()
                 logMsg["label_quality/label_origin_JSD_mean"] = x_sources_origin.mean().item()
                 logMsg["label_quality/label_refine_JSD_mena"] = x_sources_refine.mean().item()
+
+                if self.args.w_ce:
+                    logMsg["loss/ce_x"] = Lx.item()
+                    logMsg["loss/mse_u"] = Lu.item()
 
                 wandb.log(logMsg)
 
@@ -435,25 +466,13 @@ class FlowTrainer:
         acc_net = 100.*correct_net/total
         confidence_net = prob_sum_net/total
 
-        # pu_log.write('\nepoch : ' + str(epoch))
-        # pu_log.write('\n acc_flow : ' + str(acc_flow))
-        # pu_log.write('\n confidence_flow : ' + str(confidence_flow))
-        
-        # pu_log.write('\n acc_net : ' + str(acc_net))
-        # pu_log.write('\n confidence_net : ' + str(confidence_net))
-
-        # pu_log.write('\n pu_flow : ' + str(pu_flow[:5].cpu().numpy()))
-        # pu_log.write('\n pu_net : ' + str(pu_net[:5].cpu().numpy()))
-        # pu_log.write('\n gt : ' + str(gt[:5].cpu().numpy()))
-        
-        # pu_log.flush()
-
         if (wandb != None):
             logMsg = {}
             logMsg["epoch"] = epoch
             logMsg["pseudo/acc_flow"] = acc_flow
             logMsg["pseudo/confidence_flow"] = confidence_flow
-            logMsg["pseudo/acc_net"] = acc_net
-            logMsg["pseudo/confidence_net"] = confidence_net
+            if self.args.w_ce:
+                logMsg["pseudo/acc_net"] = acc_net
+                logMsg["pseudo/confidence_net"] = confidence_net
             wandb.log(logMsg)
         return
