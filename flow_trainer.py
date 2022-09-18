@@ -26,6 +26,11 @@ class SemiLoss(object):
         Lu = torch.mean((probs_u - targets_u)**2)
         return Lx, Lu, linear_rampup(epoch,warm_up)
 
+class NegEntropy(object):
+    def __call__(self,outputs):
+        probs = torch.softmax(outputs, dim=1)
+        return torch.mean(torch.sum(probs.log()*probs, dim=1))
+
 class FlowTrainer:
     def __init__(self, args) -> None:
         self.args = args
@@ -238,6 +243,7 @@ class FlowTrainer:
                 prior = prior.cuda()        
                 pred_mean = torch.softmax(logits, dim=1).mean(0)
                 penalty = torch.sum(prior*torch.log(prior/pred_mean))
+                loss_unicon = Lx + lamb * Lu + penalty
 
             ## Flow loss
             flow_feature = F.normalize(flow_feature, dim=1)
@@ -249,19 +255,17 @@ class FlowTrainer:
             delta_log_p2 = delta_log_p2.view(flow_mixed_target.size()[0], flow_mixed_target.shape[1], 1).sum(1)
             log_p2 = (approx2 - delta_log_p2)
 
-            lamb_u = linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.linear_u, self.args.lambda_u)
+            lamb_u = linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.linear_u, self.args.lambda_u) + self.args.lamb_u_base
             
-            loss_nll_x = -log_p2[:batch_size*2]
-            loss_nll_u = -log_p2[batch_size*2:]
-
-            if (self.args.lambda_u > 1):
-                log_p2[batch_size*2:] *= lamb_u
+            loss_nll_x = -log_p2[:batch_size*2].mean()
+            loss_nll_u = -log_p2[batch_size*2:].mean()
+            loss_flow = loss_nll_x + lamb_u * loss_nll_u
 
             ## Total Loss
             if self.args.w_ce:
-                loss = self.args.lambda_c * loss_simCLR + reg_f_var_loss + (-log_p2).mean() + Lx + lamb * Lu + penalty
+                loss = loss_unicon + self.args.lambda_c * loss_simCLR + loss_flow + reg_f_var_loss
             else:
-                loss = self.args.lambda_c * loss_simCLR + reg_f_var_loss + (-log_p2).mean()
+                loss = self.args.lambda_c * loss_simCLR + loss_flow + reg_f_var_loss
 
             # Compute gradient and Do SGD step
             optimizer.zero_grad()
@@ -286,8 +290,8 @@ class FlowTrainer:
                 logMsg["epoch"] = epoch
                 logMsg["lamb_Tu"] = lamb_Tu
                 
-                logMsg["loss/nll_x"] = loss_nll_x.mean().item()
-                logMsg["loss/nll_u"] = loss_nll_u.mean().item()
+                logMsg["loss/nll_x"] = loss_nll_x.item()
+                logMsg["loss/nll_u"] = loss_nll_u.item()
 
                 logMsg["loss/nll_x_max"] = loss_nll_x.max()
                 logMsg["loss/nll_x_min"] = loss_nll_x.min()

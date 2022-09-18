@@ -4,8 +4,8 @@ alpha: 0.5
 num_epochs: 400
 num_class: 200
 lr: 0.05
-lr_f: 5e-5
-batch_size: 64
+lr_f: 2e-6
+batch_size: 32
 warm_up: 20
 num_samples: 100000
 lambda_p: 100
