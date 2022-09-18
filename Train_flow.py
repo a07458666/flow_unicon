@@ -248,6 +248,17 @@ def print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, batch_idx):
         wandb.log(logMsg)
 
 def save_model(net, flowNet, epoch, model_name, model_name_flow, acc = 0):
+    if epoch <args.warm_up:
+        model_name = 'Net_warmup.pth'
+        model_name_flow = 'FlowNet_warmup.pth'
+        model_name_ema = 'Net_warmup_ema.pth'
+        model_name_flow_ema = 'FlowNet_warmup_ema.pth'
+    else:
+        model_name = 'Net.pth'
+        model_name_flow = 'FlowNet.pth'
+        model_name_ema = 'Net_ema.pth'
+        model_name_flow_ema = 'FlowNet_ema.pth'
+
     print("Save the Model-----")
     checkpoint = {
         'net': net.state_dict(),
@@ -265,7 +276,7 @@ def save_model(net, flowNet, epoch, model_name, model_name_flow, acc = 0):
 
     checkpoint_flow = {
         'net': flowNet.state_dict(),
-        'Model_number': 3,
+        'Model_number': 2,
         'Noise_Ratio': args.ratio,
         'Loss Function': 'log-likelihood',
         'Optimizer': 'SGD',
@@ -274,9 +285,38 @@ def save_model(net, flowNet, epoch, model_name, model_name_flow, acc = 0):
         'Batch Size': args.batch_size,
         'epoch': epoch,
     }
+    if args.ema:
+        checkpoint_ema = {
+            'net': flowTrainer.net_ema.state_dict(),
+            'Model_number': 3,
+            'Noise_Ratio': args.ratio,
+            'Loss Function': 'CrossEntropyLoss',
+            'Optimizer': 'SGD',
+            'Noise_mode': args.noise_mode,
+            'Accuracy': acc,
+            'Pytorch version': '1.4.0',
+            'Dataset': args.dataset,
+            'Batch Size': args.batch_size,
+            'epoch': epoch,
+        }
+
+        checkpoint_flow_ema = {
+            'net': flowTrainer.flowNet_ema.state_dict(),
+            'Model_number': 4,
+            'Noise_Ratio': args.ratio,
+            'Loss Function': 'log-likelihood',
+            'Optimizer': 'SGD',
+            'Noise_mode': args.noise_mode,
+            'Dataset': args.dataset,
+            'Batch Size': args.batch_size,
+            'epoch': epoch,
+        }
 
     torch.save(checkpoint, os.path.join(model_save_loc, model_name))
     torch.save(checkpoint_flow, os.path.join(model_save_loc, model_name_flow))
+    if args.ema:
+        torch.save(checkpoint_ema, os.path.join(model_save_loc, model_name_ema))
+        torch.save(checkpoint_flow_ema, os.path.join(model_save_loc, model_name_flow_ema))
 
 ## Call the dataloader
 if args.dataset== 'cifar10' or args.dataset== 'cifar100':
@@ -307,11 +347,16 @@ schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, args.num_epo
 ## Resume from the warmup checkpoint 
 model_name = 'Net_warmup.pth'
 model_name_flow = 'FlowNet_warmup.pth'
+model_name_ema = 'Net_warmup_ema.pth'
+model_name_flow_ema = 'FlowNet_warmup_ema.pth'
 
 if args.resume:
     start_epoch = args.warm_up
     net.load_state_dict(torch.load(os.path.join(model_save_loc, model_name))['net'])
     flowNet.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow))['net'])
+    if args.ema:
+        flowTrainer.net_ema.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_ema))['net'])
+        flowTrainer.flowNet_ema.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_ema))['net'])
 elif args.pretrain != '':
     start_epoch = 0
     args.warm_up = 1
@@ -361,12 +406,6 @@ for epoch in range(start_epoch,args.num_epochs+1):
         wandb.log(logMsg)
 
     if acc > best_acc:
-        if epoch <args.warm_up:
-            model_name = 'Net_warmup.pth'
-            model_name_flow = 'FlowNet_warmup.pth'
-        else:
-            model_name = 'Net.pth'
-            model_name_flow = 'FlowNet.pth'
 
         save_model(net, flowNet, epoch, model_name, model_name_flow, acc)
         best_acc = acc
