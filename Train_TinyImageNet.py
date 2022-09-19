@@ -16,6 +16,17 @@ import copy
 from PreResNet_tiny import *
 from Contrastive_loss import *
 
+import time
+import matplotlib.pyplot as plt
+
+
+try:
+    import wandb
+except ImportError:
+    wandb = None
+    logger.info("Install Weights & Biases for experiment logging via 'pip install wandb' (recommended)")
+
+
 parser = argparse.ArgumentParser(description='PyTorch Tiny ImageNet Training')
 parser.add_argument('--batch_size', default=64, type=int, help='train batchsize') 
 parser.add_argument('--lr', '--learning_rate', default=0.05, type=float, help='initial learning rate')
@@ -56,12 +67,12 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
     unlabeled_train_iter = iter(unlabeled_trainloader)    
     num_iter = (len(labeled_trainloader.dataset)//args.batch_size)+1
 
-    for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x) in enumerate(labeled_trainloader):      
+    for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x, _) in enumerate(labeled_trainloader):      
         try:
-            inputs_u, inputs_u2, inputs_u3, inputs_u4 = unlabeled_train_iter.next()
+            inputs_u, inputs_u2, inputs_u3, inputs_u4, _ = unlabeled_train_iter.next()
         except:
             unlabeled_train_iter = iter(unlabeled_trainloader)
-            inputs_u, inputs_u2, inputs_u3, inputs_u4 = unlabeled_train_iter.next()
+            inputs_u, inputs_u2, inputs_u3, inputs_u4, _ = unlabeled_train_iter.next()
         
         batch_size = inputs_x.size(0)
 
@@ -285,13 +296,107 @@ def create_model():
     model = model.cuda()
     return model
 
+def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
+    labeled_idx = labeled_trainloader.dataset.pred_idx
+    unlabeled_idx = unlabeled_trainloader.dataset.pred_idx
+    origin_prob =  labeled_trainloader.dataset.origin_prob
+    labeled_prob = [origin_prob[i] for i in labeled_idx]
+    unlabeled_prob = [origin_prob[i] for i in unlabeled_idx]
+    sample_ratio = torch.sum(prob<threshold).item()/num_samples
+
+    num_cleanset, num_noiseset = len(labeled_trainloader.dataset), len(unlabeled_trainloader.dataset)
+    num_wholeset = num_cleanset + num_noiseset
+
+    cleanset_o_label, cleanset_n_label = labeled_trainloader.dataset.origin_label, labeled_trainloader.dataset.noise_label
+    noiseset_o_label, noiseset_n_label = unlabeled_trainloader.dataset.origin_label, unlabeled_trainloader.dataset.noise_label
+
+    cleanset_noise_mask = (cleanset_o_label != cleanset_n_label).astype(float)
+    noiseset_noise_mask = (noiseset_o_label != noiseset_n_label).astype(float)
+    
+    num_cleanset_noise = cleanset_noise_mask.sum()
+    num_noiseset_noise = noiseset_noise_mask.sum()
+    num_noise = num_cleanset_noise + num_noiseset_noise
+
+    num_cleanset_clean = num_cleanset - num_cleanset_noise
+    num_noiseset_clean = num_noiseset - num_noiseset_noise
+    num_clean = num_wholeset - num_noise
+
+    eps = 1e-20
+    clean_recall = num_cleanset_clean / (num_clean + eps)
+    clean_precision = num_cleanset_clean / (num_cleanset + eps)
+    clean_f1 = (2 * clean_recall * clean_precision) / (clean_recall + clean_precision + eps)
+
+    noise_recall = num_noiseset_noise / (num_noise + eps)
+    noise_precision = num_noiseset_noise / (num_noiseset + eps)
+    noise_f1 = (2 * noise_recall * noise_precision) / (noise_recall + noise_precision + eps)
+
+    # draw JSD dis
+    clean_prob = []
+    noise_prob = []
+    for idx_noise_zip in [zip(labeled_idx, cleanset_noise_mask), zip(unlabeled_idx, noiseset_noise_mask)]:
+        for idx, is_noise in idx_noise_zip:
+            p = origin_prob[idx]
+            if is_noise == 1.0:
+                noise_prob.append(float(p))
+            else:
+                clean_prob.append(float(p))
+
+    plt.clf()
+    kwargs = dict(histtype='stepfilled', alpha=0.75, density=False, bins=20)
+    plt.hist(clean_prob, color='green', range=(0., 1.), label='clean', **kwargs)
+    plt.hist(noise_prob, color='red'  , range=(0., 1.), label='noisy', **kwargs)
+
+    plt.axvline(x=threshold,          color='black')
+    plt.axvline(x=origin_prob.mean(), color='gray')
+    plt.xlabel('JSD Values')
+    plt.ylabel('count')
+    plt.title(f'JSD Distribution of N Samples epoch :{epoch}')
+    plt.xlim(0, 1)
+    plt.grid(True)
+    plt.savefig(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
+
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["JSD"] = wandb.Image(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
+        logMsg["JSD/threshold"] = threshold
+        logMsg["JSD/sample_ratio"] = sample_ratio
+        logMsg["JSD/labeled_mean"] =  np.mean(labeled_prob)
+        logMsg["JSD/labeled_var"] = np.var(labeled_prob)
+        logMsg["JSD/unlabeled_mean"] = np.mean(unlabeled_prob)
+        logMsg["JSD/unlabeled_var"] = np.var(unlabeled_prob)
+
+        logMsg["JSD_clean/labeled_mean"] =  np.mean(labeled_prob)
+        logMsg["JSD_clean/labeled_var"] = np.var(labeled_prob)
+        logMsg["JSD_clean/unlabeled_mean"] = np.mean(unlabeled_prob)
+        logMsg["JSD_clean/unlabeled_var"] = np.var(unlabeled_prob)
+
+        logMsg["JSD_selection/clean_recall"] = clean_recall
+        logMsg["JSD_selection/clean_precision"] = clean_precision
+        logMsg["JSD_selection/clean_f1"] = clean_f1
+    
+        logMsg["JSD_selection/noise_recall"] = noise_recall
+        logMsg["JSD_selection/noise_precision"] = noise_precision
+        logMsg["JSD_selection/noise_f1"] = noise_f1
+        wandb.log(logMsg)
+
 folder = 'TinyImageNet_' + str(args.ratio)
 model_save_loc = './checkpoint/' + folder
 if not os.path.exists(model_save_loc):
     os.mkdir(model_save_loc)
+    os.mkdir(model_save_loc + '/JSD_distribution')
 
 log=open(os.path.join(model_save_loc, 'test_acc_%s.txt'%args.id),'w')     
 log.flush()
+
+## wandb
+if (wandb != None):
+    wandb.init(project="FlowUNICON", entity="andy-su", name=folder)
+    wandb.config.update(args)
+    wandb.define_metric("acc/test", summary="max")
+    wandb.define_metric("loss/ce_x", summary="min")
+    wandb.define_metric("loss/mse_u", summary="min")
+    wandb.run.log_code(".")
 
 warm_up = 20
 loader = dataloader(root=args.data_path, batch_size=args.batch_size, num_workers=4, ratio = args.ratio, noise_mode = args.noise_mode, noise_file='%s/clean_%.2f_%s.npz'%(args.data_path,args.ratio, args.noise_mode))
@@ -332,6 +437,7 @@ SR = 0
 
 ## Main Training 
 for epoch in range(start_epoch,args.num_epochs+1):   
+    startTime = time.time() 
     num_samples = 100000
 
     ## After 100 epochs, change the learning rate of the optimizer  
@@ -371,18 +477,26 @@ for epoch in range(start_epoch,args.num_epochs+1):
         ## JSD Value Calculation
         prob = Calculate_JSD(net2, net1, num_samples)           
         threshold = torch.mean(prob)
-        if threshold.item()>args.d_u:
-            threshold = threshold - (threshold-torch.min(prob))/arg.tau
         SR = torch.sum(prob<threshold).item()/num_samples            
 
         print('Train Net2')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob)    # Uniform Selection
+        logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
         train(epoch, net1,net2,optimizer1,labeled_trainloader, unlabeled_trainloader)       # train net1
 
     acc = test(net1,net2, test_loader)
     log.write(str(acc)+'\n')
     log.flush()  
 
+
+    ## wandb
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["runtime"] = time.time() - startTime
+        logMsg["acc/test"] = acc
+        wandb.log(logMsg)
+    
     if acc > best_acc:
         if epoch <warm_up:
             model_name_1 = 'Net1_warmup.pth'
@@ -423,3 +537,4 @@ for epoch in range(start_epoch,args.num_epochs+1):
         torch.save(checkpoint1, os.path.join(model_save_loc, model_name_1))
         torch.save(checkpoint2, os.path.join(model_save_loc, model_name_2))
         best_acc = acc
+
