@@ -59,7 +59,6 @@ def argumentParse():
     parser.add_argument('--pretrained', action='store_true', help = 'pretrained(Clothing1M)')
     parser.add_argument('--w_ce', action='store_true', help = 'train with cross entrioy')
 
-
     # load yaml
     _add_args_from_yaml(parser)
 

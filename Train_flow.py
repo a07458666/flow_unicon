@@ -57,7 +57,7 @@ elif args.dataset=='TinyImageNet':
     from PreResNet_tiny import *
     from dataloader_tiny import tinyImagenet_dataloader as dataloader
 elif args.dataset=="Clothing1M":
-    from PreResNet_source import *
+    from PreResNet_clothing1M import *
     import dataloader_clothing1M as dataloader
 
 ## Checkpoint Location
@@ -88,22 +88,6 @@ if (wandb != None):
     wandb.define_metric("loss/nll_var", summary="min")
     
     wandb.run.log_code(".")
-
-## Test Accuracy
-def test(epoch,net,flowNet, test_loader):
-    acc, confidence = flowTrainer.testByFlow(net, flowNet, test_loader)
-    print("\n| Test Epoch #%d\t Accuracy: %.2f%%\n" %(epoch,acc))  
-    
-    ## wandb
-    if (wandb != None):
-        logMsg = {}
-        logMsg["epoch"] = epoch
-        logMsg["acc/test"] = acc
-        wandb.log(logMsg)
-    
-    test_log.write(str(acc)+'\n')
-    test_log.flush()  
-    return acc, confidence
 
 def Selection_Rate(prob, pre_threshold):
     threshold = torch.mean(prob)
@@ -392,8 +376,12 @@ for epoch in range(start_epoch,args.num_epochs+1):
         logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
         flowTrainer.train(epoch, net, flowNet, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
 
-    acc, confidence = test(epoch, net, flowNet, test_loader)
-
+    
+    if args.w_ce:
+        acc, confidence, acc_ce, confidence_ce, acc_mix, confidence_mix = flowTrainer.testByFlow(epoch, net, flowNet, test_loader)
+    else:
+        acc, confidence = flowTrainer.testByFlow(epoch, net, flowNet, test_loader)
+    
     scheduler.step()
     schedulerFlow.step()
 
@@ -402,9 +390,14 @@ for epoch in range(start_epoch,args.num_epochs+1):
         logMsg = {}
         logMsg["epoch"] = epoch
         logMsg["runtime"] = time.time() - startTime
+        logMsg["acc/test"] = acc
         logMsg["confidence score"] = confidence
+        if args.w_ce:
+            logMsg["acc/test(ce_head)"] = acc_ce
+            logMsg["confidence score(test_ce_head)"] = confidence_ce
+            logMsg["acc/test(mix)"] = acc_mix
+            logMsg["confidence score(mix)"] = confidence_mix
         wandb.log(logMsg)
-
     if acc > best_acc:
 
         save_model(net, flowNet, epoch, model_name, model_name_flow, acc)

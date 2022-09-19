@@ -118,7 +118,7 @@ class PreActBottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=10):
+    def __init__(self, block, num_blocks, num_classes=10, feature_dim = 2048):
         super(ResNet, self).__init__()
         self.in_planes = 64
 
@@ -128,8 +128,9 @@ class ResNet(nn.Module):
         self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
-        self.linear = nn.Linear(2048, num_classes)
-        self.projection_head = nn.Linear(2048, 128)
+        self.linear = nn.Linear(feature_dim, num_classes)
+        self.feature_head = nn.Linear(feature_dim, 128)
+        self.projection_head = nn.Linear(feature_dim, 128)
         self.bnl = nn.BatchNorm1d(128)
 
     def _make_layer(self, block, planes, num_blocks, stride):
@@ -140,7 +141,7 @@ class ResNet(nn.Module):
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
-    def forward(self, x, lin=0, lout=5):
+    def forward(self, x, lin=0, lout=5, get_feature=False):
         out = x
         if lin < 1 and lout > -1:
             out = self.conv1(out)
@@ -160,7 +161,14 @@ class ResNet(nn.Module):
             out1 = self.bnl(self.projection_head(out))
             out = self.linear(out)
 
-        return out1, out
+            ssl_out = self.bnl(self.projection_head(out))
+            class_out = self.linear(out)
+            feature_out = self.bnl(self.feature_head(out))
+
+        if get_feature:
+            return ssl_out, class_out, feature_out
+        else:
+            return ssl_out, class_out
 
 
 def ResNet18(num_classes=10):
