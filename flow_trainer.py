@@ -291,7 +291,7 @@ class FlowTrainer:
             if (wandb != None):
                 logMsg = {}
                 logMsg["epoch"] = epoch
-                logMsg["lamb_Tu"] = lamb_Tu
+                # logMsg["lamb_Tu"] = lamb_Tu
                 
                 logMsg["loss/nll_x"] = loss_nll_x.item()
                 logMsg["loss/nll_u"] = loss_nll_u.item()
