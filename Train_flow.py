@@ -370,6 +370,8 @@ for epoch in range(start_epoch,args.num_epochs+1):
         print("Calculate JSD")
         prob = flowTrainer.Calculate_JSD(net, flowNet, args.num_samples, eval_loader)
         SR , threshold = Selection_Rate(prob, jsd_threshold)
+        if threshold.item()>args.d_u:
+            threshold = threshold - (threshold-torch.min(prob))/args.tau
         jsd_threshold = threshold
         print('Train Net\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection

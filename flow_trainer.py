@@ -170,15 +170,17 @@ class FlowTrainer:
                 self.log_pu(pu_flow, pu_net, labels_u_o, epoch)
 
                 if self.args.w_ce:
-                    pu = (pu_flow + pu_net) / 2
+                    pu_net_sp = self.sharpening(pu_net, self.args.Tu)
+                    targets_u = (pu_flow + pu_net_sp) / 2
                 else:
                     pu = pu_flow
+                    targets_u = self.sharpening(pu, self.args.Tu)
                 
-                lamb_Tu = (1 - linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.lambda_p, self.args.Tu))
+                # lamb_Tu = (1 - linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.lambda_p, self.args.Tu))
 
-                ptu = pu**(1/lamb_Tu)            ## Temparature Sharpening
+                # ptu = pu**(1/lamb_Tu)            ## Temparature Sharpening
                 
-                targets_u = ptu / ptu.sum(dim=1, keepdim=True)
+                # targets_u = ptu / ptu.sum(dim=1, keepdim=True)
                 targets_u = targets_u.detach()                  
 
                 ## Label refinement
@@ -199,9 +201,10 @@ class FlowTrainer:
                     
                 px_mix = w_x*labels_x + (1-w_x)*px
 
-                ptx = px_mix**(1/self.args.Tx)    ## Temparature sharpening 
+                # ptx = px_mix**(1/self.args.Tx)    ## Temparature sharpening 
                             
-                targets_x = ptx / ptx.sum(dim=1, keepdim=True)           
+                # targets_x = ptx / ptx.sum(dim=1, keepdim=True)   
+                targets_x = self.sharpening(px_mix, self.args.Tu)        
                 targets_x = targets_x.detach()
 
                 self.print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, epoch)
@@ -511,3 +514,7 @@ class FlowTrainer:
                 logMsg["pseudo/confidence_net"] = confidence_net
             wandb.log(logMsg)
         return
+    
+    def sharpening(self, labels, T):
+        labels = labels**(1/T)
+        return labels / labels.sum(dim=1, keepdim=True)

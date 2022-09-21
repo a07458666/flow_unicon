@@ -4,7 +4,7 @@ alpha: 4
 num_epochs: 350
 num_class: 10
 lr: 2e-2
-lr_f: 4e-4
+lr_f: 4e-5
 warm_up: 10
 num_samples: 50000
 lambda_p: 50

@@ -161,7 +161,7 @@ class ResNet(nn.Module):
             # print(out.size())
             ssl_out = self.bnl(self.projection_head(out))
             class_out = self.linear(out)
-            feature_out = self.bnl(self.feature_head(out))
+            feature_out = self.feature_head(out)
 
         if get_feature:
             return ssl_out, class_out, feature_out
