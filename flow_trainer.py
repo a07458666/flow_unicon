@@ -174,7 +174,8 @@ class FlowTrainer:
                     targets_u = (pu_flow + pu_net_sp) / 2
                 else:
                     pu = pu_flow
-                    targets_u = self.sharpening(pu, self.args.Tu)
+                    targets_u = pu
+                    # targets_u = self.sharpening(pu, self.args.Tu)
                 
                 # lamb_Tu = (1 - linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.lambda_p, self.args.Tu))
 
@@ -198,7 +199,7 @@ class FlowTrainer:
                     px = (px_flow + px_net) / 2
                 else:
                     px = px_flow
-                    
+
                 px_mix = w_x*labels_x + (1-w_x)*px
 
                 # ptx = px_mix**(1/self.args.Tx)    ## Temparature sharpening 
