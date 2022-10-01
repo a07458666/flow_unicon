@@ -158,15 +158,13 @@ class ResNet(nn.Module):
         if lout > 4:
             out = F.avg_pool2d(out, 4)
             out = out.view(out.size(0), -1)
-            out1 = self.bnl(self.projection_head(out))
-            out = self.linear(out)
 
             ssl_out = self.bnl(self.projection_head(out))
             class_out = self.linear(out)
-            feature_out = self.bnl(self.feature_head(out))
+            feature_out = self.feature_head(out)
 
         if get_feature:
-            return ssl_out, class_out, feature_out
+            return ssl_out, class_out, ssl_out
         else:
             return ssl_out, class_out
 

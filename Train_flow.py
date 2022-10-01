@@ -80,14 +80,13 @@ loss_log = open(model_save_loc +'/loss_batch.txt','w')
 ## wandb
 if (wandb != None):
     wandb.init(project="FlowUNICON", entity="andy-su", name=folder)
+    wandb.run.log_code(".")
     wandb.config.update(args)
     wandb.define_metric("acc/test", summary="max")
     wandb.define_metric("loss/nll", summary="min")
     wandb.define_metric("loss/nll_max", summary="min")
     wandb.define_metric("loss/nll_min", summary="min")
     wandb.define_metric("loss/nll_var", summary="min")
-    
-    wandb.run.log_code(".")
 
 def Selection_Rate(prob, pre_threshold):
     threshold = torch.mean(prob)
@@ -99,8 +98,8 @@ def Selection_Rate(prob, pre_threshold):
     print("prob size : ", prob.size())
     print("down :", torch.sum(prob<threshold).item())
     print("up :", torch.sum(prob>threshold).item())
-    if SR <= 1/args.num_class or SR >= 1.0:
-        new_SR = np.clip(SR, 1/args.num_class, 0.9)
+    if SR <= 0.1  or SR >= 1.0:
+        new_SR = np.clip(SR, 0.1 , 0.9)
         print(f'WARNING: sample rate = {SR}, set to {new_SR}')
         SR = new_SR
     return SR, threshold
@@ -269,38 +268,38 @@ def save_model(net, flowNet, epoch, model_name, model_name_flow, acc = 0):
         'Batch Size': args.batch_size,
         'epoch': epoch,
     }
-    if args.ema:
-        checkpoint_ema = {
-            'net': flowTrainer.net_ema.state_dict(),
-            'Model_number': 3,
-            'Noise_Ratio': args.ratio,
-            'Loss Function': 'CrossEntropyLoss',
-            'Optimizer': 'SGD',
-            'Noise_mode': args.noise_mode,
-            'Accuracy': acc,
-            'Pytorch version': '1.4.0',
-            'Dataset': args.dataset,
-            'Batch Size': args.batch_size,
-            'epoch': epoch,
-        }
+    
+    checkpoint_ema = {
+        'net': flowTrainer.net_ema.state_dict(),
+        'Model_number': 3,
+        'Noise_Ratio': args.ratio,
+        'Loss Function': 'CrossEntropyLoss',
+        'Optimizer': 'SGD',
+        'Noise_mode': args.noise_mode,
+        'Accuracy': acc,
+        'Pytorch version': '1.4.0',
+        'Dataset': args.dataset,
+        'Batch Size': args.batch_size,
+        'epoch': epoch,
+    }
 
-        checkpoint_flow_ema = {
-            'net': flowTrainer.flowNet_ema.state_dict(),
-            'Model_number': 4,
-            'Noise_Ratio': args.ratio,
-            'Loss Function': 'log-likelihood',
-            'Optimizer': 'SGD',
-            'Noise_mode': args.noise_mode,
-            'Dataset': args.dataset,
-            'Batch Size': args.batch_size,
-            'epoch': epoch,
-        }
+    checkpoint_flow_ema = {
+        'net': flowTrainer.flowNet_ema.state_dict(),
+        'Model_number': 4,
+        'Noise_Ratio': args.ratio,
+        'Loss Function': 'log-likelihood',
+        'Optimizer': 'SGD',
+        'Noise_mode': args.noise_mode,
+        'Dataset': args.dataset,
+        'Batch Size': args.batch_size,
+        'epoch': epoch,
+    }
 
     torch.save(checkpoint, os.path.join(model_save_loc, model_name))
     torch.save(checkpoint_flow, os.path.join(model_save_loc, model_name_flow))
-    if args.ema:
-        torch.save(checkpoint_ema, os.path.join(model_save_loc, model_name_ema))
-        torch.save(checkpoint_flow_ema, os.path.join(model_save_loc, model_name_flow_ema))
+    
+    torch.save(checkpoint_ema, os.path.join(model_save_loc, model_name_ema))
+    torch.save(checkpoint_flow_ema, os.path.join(model_save_loc, model_name_flow_ema))
 
 ## Call the dataloader
 if args.dataset== 'cifar10' or args.dataset== 'cifar100':
@@ -338,9 +337,10 @@ if args.resume:
     start_epoch = args.warm_up
     net.load_state_dict(torch.load(os.path.join(model_save_loc, model_name))['net'])
     flowNet.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow))['net'])
-    if args.ema:
-        flowTrainer.net_ema.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_ema))['net'])
-        flowTrainer.flowNet_ema.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_ema))['net'])
+    
+    flowTrainer.net_ema.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_ema))['net'])
+    flowTrainer.flowNet_ema.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_ema))['net'])
+    
 elif args.pretrain != '':
     start_epoch = 0
     args.warm_up = 1

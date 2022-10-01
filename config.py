@@ -28,7 +28,8 @@ def argumentParse():
     parser.add_argument('--alpha_warmup', default=0.2, type=float, help='parameter for Beta (warmup)')
     parser.add_argument('--alpha', default=4, type=float, help='parameter for Beta')
     parser.add_argument('--linear_u', default=340, type=float, help='weight for unsupervised loss')
-    parser.add_argument('--lambda_u', default=3, type=float, help='weight for unsupervised loss')
+    parser.add_argument('--lambda_u', default=30, type=float, help='weight for unsupervised loss')
+    parser.add_argument('--lambda_flow_u', default=3, type=float, help='weight for unsupervised loss')
     parser.add_argument('--lamb_u_base', default=1, type=float, help='weight for unsupervised loss start value')
     parser.add_argument('--lambda_p', default=50, type=float, help='sharpening lamb')
     parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
@@ -50,7 +51,6 @@ def argumentParse():
     parser.add_argument('--pretrain', default='', type=str)
     parser.add_argument('--pseudo_std', default=0, type=float)
     parser.add_argument('--warmup_mixup', action='store_true')
-    parser.add_argument('--ema', action='store_true', help = 'Exponential Moving Average')
     parser.add_argument('--decay', default=0.9, type=float, help='Exponential Moving Average decay')
     parser.add_argument('--warm_up', default=10, type=int)
     parser.add_argument('--num_samples', default=50000, type=int)
@@ -59,6 +59,7 @@ def argumentParse():
     parser.add_argument('--thr', default=0.693, type=float, help='Threadhold JSD')
     parser.add_argument('--clip_grad', action='store_true', help = 'cliping grad')
     parser.add_argument('--pretrained', action='store_true', help = 'pretrained(Clothing1M)')
+    parser.add_argument('--split', action='store_true', help = 'split flow loss to x, u')
     parser.add_argument('--w_ce', action='store_true', help = 'train with cross entrioy')
 
     # load yaml
