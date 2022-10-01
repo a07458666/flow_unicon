@@ -11,4 +11,3 @@ num_samples: 100000
 lambda_p: 100
 Tu: 0.2
 pretrained: true
-ema: true
