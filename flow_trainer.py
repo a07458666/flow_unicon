@@ -249,7 +249,7 @@ class FlowTrainer:
             if self.args.split:
                 loss_flow = loss_nll_x + (lamb_u * loss_nll_u)
             else:
-                loss_flow = loss_nll_x + loss_nll_u
+                loss_flow = (-log_p2).mean()
 
             ## Total Loss
             if self.args.w_ce:
