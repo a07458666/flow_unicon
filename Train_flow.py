@@ -315,7 +315,6 @@ net = create_model()
 # flow model
 flowTrainer = FlowTrainer(args)
 flowNet = flowTrainer.create_model()
-flowTrainer.setEma(net, flowNet)
 
 cudnn.benchmark = True
 
@@ -350,6 +349,7 @@ else:
 
 best_acc = 0
 jsd_threshold = args.thr
+flowTrainer.setEma(net, flowNet)
 
 ## Warmup and SSL-Training 
 for epoch in range(start_epoch,args.num_epochs+1):
