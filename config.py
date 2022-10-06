@@ -37,7 +37,7 @@ def argumentParse():
     parser.add_argument('--Tx', default=0.5, type=float, help='sharpening temperature')
     parser.add_argument('--num_epochs', default=350, type=int)
     parser.add_argument('-r', '--ratio', default=0.2 , type=float, help='noise ratio')
-    parser.add_argument('--d_u',  default=0.7, type=float)
+    parser.add_argument('--d_u',  default=0.5, type=float)
     parser.add_argument('--tau', default=5, type=float, help='filtering coefficient')
     parser.add_argument('--seed', default=123)
     parser.add_argument('--gpuid', default=0, type=int)
