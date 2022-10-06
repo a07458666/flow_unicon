@@ -130,8 +130,8 @@ class FlowTrainer:
         net.train()
         flownet.train()
 
-        unlabeled_train_iter = iter(unlabeled_trainloader)    
-        num_iter = len(labeled_trainloader)
+        unlabeled_train_iter = iter(unlabeled_trainloader)
+        num_iter = (len(labeled_trainloader.dataset)//labeled_trainloader.batch_size)+1 
 
         for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x, labels_x_o) in enumerate(labeled_trainloader):      
             try:
@@ -253,9 +253,9 @@ class FlowTrainer:
 
             ## Total Loss
             if self.args.w_ce:
-                loss = loss_unicon + self.args.lambda_c * loss_simCLR + loss_flow + reg_f_var_loss
+                loss = loss_unicon + self.args.lambda_c * loss_simCLR + loss_flow #+ reg_f_var_loss
             else:
-                loss = self.args.lambda_c * loss_simCLR + loss_flow + reg_f_var_loss
+                loss = self.args.lambda_c * loss_simCLR + loss_flow #+ reg_f_var_loss
 
             # Compute gradient and Do SGD step
             optimizer.zero_grad()

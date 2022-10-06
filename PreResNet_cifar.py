@@ -164,7 +164,7 @@ class ResNet(nn.Module):
             feature_out = self.feature_head(out)
 
         if get_feature:
-            return ssl_out, class_out, ssl_out
+            return ssl_out, class_out, feature_out
         else:
             return ssl_out, class_out
 
