@@ -90,9 +90,11 @@ if (wandb != None):
 
 def Selection_Rate(prob, pre_threshold):
     threshold = torch.mean(prob)
-    SR = torch.sum(prob<threshold).item()/args.num_samples
     if args.ema_jsd:
         threshold = (args.jsd_decay * pre_threshold) + ((1 - args.jsd_decay) * threshold)
+    if threshold.item()>args.d_u:
+            threshold = threshold - (threshold-torch.min(prob))/args.tau
+    SR = torch.sum(prob<threshold).item()/args.num_samples
     print("threshold : ", torch.mean(prob))
     print("threshold(new) : ", threshold)
     print("prob size : ", prob.size())
@@ -315,7 +317,6 @@ net = create_model()
 # flow model
 flowTrainer = FlowTrainer(args)
 flowNet = flowTrainer.create_model()
-flowTrainer.setEma(net, flowNet)
 
 cudnn.benchmark = True
 
@@ -350,6 +351,7 @@ else:
 
 best_acc = 0
 jsd_threshold = args.thr
+flowTrainer.setEma(net, flowNet)
 
 ## Warmup and SSL-Training 
 for epoch in range(start_epoch,args.num_epochs+1):
@@ -370,8 +372,6 @@ for epoch in range(start_epoch,args.num_epochs+1):
         print("Calculate JSD")
         prob = flowTrainer.Calculate_JSD(net, flowNet, args.num_samples, eval_loader)
         SR , threshold = Selection_Rate(prob, jsd_threshold)
-        if threshold.item()>args.d_u:
-            threshold = threshold - (threshold-torch.min(prob))/args.tau
         jsd_threshold = threshold
         print('Train Net\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection

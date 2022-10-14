@@ -130,8 +130,8 @@ class FlowTrainer:
         net.train()
         flownet.train()
 
-        unlabeled_train_iter = iter(unlabeled_trainloader)    
-        num_iter = len(labeled_trainloader)
+        unlabeled_train_iter = iter(unlabeled_trainloader)
+        num_iter = (len(labeled_trainloader.dataset)//labeled_trainloader.batch_size)+1 
 
         for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x, labels_x_o) in enumerate(labeled_trainloader):      
             try:
@@ -216,7 +216,7 @@ class FlowTrainer:
             _, logits, flow_feature = net(mixed_input, get_feature = True) # add flow_feature
 
             # Regularization feature var
-            # reg_f_var_loss = torch.clamp(1-torch.sqrt(flow_feature.var(dim=0) + 1e-10), min=0).mean()
+            reg_f_var_loss = torch.clamp(1-torch.sqrt(flow_feature.var(dim=0) + 1e-10), min=0).mean()
             
             logits_x = logits[:batch_size*2]
             logits_u = logits[batch_size*2:]        
@@ -253,9 +253,9 @@ class FlowTrainer:
 
             ## Total Loss
             if self.args.w_ce:
-                loss = loss_unicon + self.args.lambda_c * loss_simCLR + loss_flow #+ reg_f_var_loss
+                loss = loss_unicon + self.args.lambda_c * loss_simCLR + loss_flow + reg_f_var_loss
             else:
-                loss = self.args.lambda_c * loss_simCLR + loss_flow #+ reg_f_var_loss
+                loss = self.args.lambda_c * loss_simCLR + loss_flow + reg_f_var_loss
 
             # Compute gradient and Do SGD step
             optimizer.zero_grad()
@@ -290,7 +290,7 @@ class FlowTrainer:
                 logMsg["loss/nll_u_var"] = loss_nll_u.var()
 
                 logMsg["loss/simCLR"] = loss_simCLR.item()
-                # logMsg["loss/reg_f_var_loss"] = reg_f_var_loss.item()
+                logMsg["loss/reg_f_var_loss"] = reg_f_var_loss.item()
 
                 logMsg["label_quality/unlabel_pseudo_JSD_mean"] = u_sources_pseudo.mean().item()
                 logMsg["label_quality/label_origin_JSD_mean"] = x_sources_origin.mean().item()
@@ -360,6 +360,7 @@ class FlowTrainer:
             return probs_mean
 
     def testByFlow(self, epoch, net, flownet, test_loader):
+        print("Test")
         net.eval()
         flownet.eval()
         total = 0
