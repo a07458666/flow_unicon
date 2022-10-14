@@ -253,9 +253,9 @@ class FlowTrainer:
 
             ## Total Loss
             if self.args.w_ce:
-                loss = loss_unicon + self.args.lambda_c * loss_simCLR + loss_flow #+ reg_f_var_loss
+                loss = loss_unicon + self.args.lambda_c * loss_simCLR + loss_flow + reg_f_var_loss
             else:
-                loss = self.args.lambda_c * loss_simCLR + loss_flow #+ reg_f_var_loss
+                loss = self.args.lambda_c * loss_simCLR + loss_flow + reg_f_var_loss
 
             # Compute gradient and Do SGD step
             optimizer.zero_grad()
@@ -360,6 +360,7 @@ class FlowTrainer:
             return probs_mean
 
     def testByFlow(self, epoch, net, flownet, test_loader):
+        print("Test")
         net.eval()
         flownet.eval()
         total = 0
