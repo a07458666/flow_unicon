@@ -19,6 +19,10 @@ import torchnet
 from Contrastive_loss import *
 from PreResNet_clothing1M import *
 
+# flow
+from flow_trainer import FlowTrainer
+from flowModule.utils import standard_normal_logprob, linear_rampup, mix_match
+
 try:
     import wandb
 except ImportError:
@@ -29,6 +33,7 @@ except ImportError:
 parser = argparse.ArgumentParser(description='PyTorch Clothing1M Training')
 parser.add_argument('--batch_size', default=32, type=int, help='train batchsize') 
 parser.add_argument('--lr', '--learning_rate', default=0.002, type=float, help='initial learning rate')   ## Set the learning rate to 0.005 for faster training at the beginning
+parser.add_argument('--lr_f', default=2e-6, type=float, help='initial flow learning rate')
 parser.add_argument('--alpha', default=0.5, type=float, help='parameter for Beta')
 parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
 parser.add_argument('--T', default=0.5, type=float, help='sharpening temperature')
@@ -42,8 +47,9 @@ parser.add_argument('--num_class', default=14, type=int)
 parser.add_argument('--num_batches', default=1000, type=int)
 parser.add_argument('--dataset', default="Clothing1M", type=str)
 parser.add_argument('--resume', default=False, type=bool, help = 'Resume from the warmup checkpoint')
+parser.add_argument('--warm_up', default=0, type=int)
 parser.add_argument('--name', default="", type=str)
-
+parser.add_argument('--flow_modules', default="256-256-256-256", type=str)
 args = parser.parse_args()
 
 torch.cuda.set_device(args.gpuid)
@@ -57,18 +63,13 @@ contrastive_criterion = SupConLoss()
 # wandb.init(project="noisy-label-project-clothing1M", entity="...")
 
 ## Training
-def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloader):
-    net2.eval()         # Fix one network and train the other    
-    net.train()       
+def train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, unlabeled_trainloader):
+    net.train()         # Fix one network and train the other    
+    flowNet.train()       
 
     unlabeled_train_iter = iter(unlabeled_trainloader)    
     num_iter_un  = (len(unlabeled_trainloader.dataset)//args.batch_size)+1
     num_iter_lab = (len(labeled_trainloader.dataset)//args.batch_size)+1
-
-    loss_x = 0
-    loss_u = 0
-    loss_scl = 0
-    loss_ucl = 0
 
     num_iter = num_iter_lab
     
@@ -89,27 +90,19 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
         inputs_u, inputs_u2, inputs_u3, inputs_u4 = inputs_u.cuda(), inputs_u2.cuda(), inputs_u3.cuda(), inputs_u4.cuda()
         
         with torch.no_grad():
-
             # Label co-guessing of unlabeled samples
-            _, outputs_u11 = net(inputs_u3)
-            _, outputs_u12 = net(inputs_u4)
-            _, outputs_u21 = net2(inputs_u3)
-            _, outputs_u22 = net2(inputs_u4)            
-            
-            pu = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1) + torch.softmax(outputs_u21, dim=1) + torch.softmax(outputs_u22, dim=1)) / 4       
-            ptu = pu**(1/args.T)                             ## Temparature Sharpening
+            pu_net, pu_flow = flowTrainer.get_pseudo_label(net, flowNet, inputs_u3, inputs_u4)
+            pu_net_sp = flowTrainer.sharpening(pu_net, args.T)  ## Temparature Sharpening
+            ptu = (pu_net_sp + pu_flow) / 2
             
             targets_u = ptu / ptu.sum(dim=1, keepdim=True)   ## Normalize
             targets_u = targets_u.detach()     
 
             ## Label refinement of labeled samples
-            _, outputs_x  = net(inputs_x3)
-            _, outputs_x2 = net(inputs_x4)            
-            
-            px = (torch.softmax(outputs_x, dim=1) + torch.softmax(outputs_x2, dim=1)) / 2
-
-            px = w_x*labels_x + (1-w_x)*px              
-            ptx = px**(1/args.T)                            ## Temparature sharpening 
+            px_net, px_flow = flowTrainer.get_pseudo_label(net, flowNet, inputs_x3, inputs_x4)
+            px = (px_net + px_flow) / 2       
+            px = w_x*labels_x + (1-w_x)*px        
+            ptx = flowTrainer.sharpening(px, args.T)  ## Temparature Sharpening        
                         
             targets_x = ptx / ptx.sum(dim=1, keepdim=True)  ## normalize           
             targets_x = targets_x.detach()
@@ -124,7 +117,6 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
         features    = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
         loss_simCLR = contrastive_criterion(features)
 
-
         all_inputs  = torch.cat([inputs_x, inputs_x2, inputs_u, inputs_u2], dim=0)
         all_targets = torch.cat([targets_x, targets_x, targets_u, targets_u], dim=0)
 
@@ -136,11 +128,24 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
         mixed_input  = (l * input_a[: batch_size * 2] + (1 - l) * input_b[: batch_size * 2])
         mixed_target = (l * target_a[: batch_size * 2] + (1 - l) * target_b[: batch_size * 2])
                 
-        _, logits = net(mixed_input)
+        _, logits, flow_feature = net(mixed_input, get_feature = True)
 
         Lx = -torch.mean(
             torch.sum(F.log_softmax(logits, dim=1) * mixed_target, dim=1)
         )
+
+        # Regularization feature var
+        reg_f_var_loss = torch.clamp(1-torch.sqrt(flow_feature.var(dim=0) + 1e-10), min=0).mean()
+            
+        ## Flow
+        flow_mixed_target = mixed_target.unsqueeze(1).cuda()
+        delta_p = torch.zeros(flow_mixed_target.shape[0], flow_mixed_target.shape[1], 1).cuda()
+        approx21, delta_log_p2 = flowNet(flow_mixed_target, flow_feature, delta_p)
+
+        approx2 = standard_normal_logprob(approx21).view(mixed_target.size()[0], -1).sum(1, keepdim=True)
+        delta_log_p2 = delta_log_p2.view(flow_mixed_target.size()[0], flow_mixed_target.shape[1], 1).sum(1)
+        log_p2 = (approx2 - delta_log_p2)
+        loss_flow = (-log_p2).mean()
 
         ## Regularization
         prior = torch.ones(args.num_class) / args.num_class
@@ -148,9 +153,8 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
         pred_mean = torch.softmax(logits, dim=1).mean(0)
         penalty = torch.sum(prior * torch.log(prior / pred_mean))
 
-        loss = Lx  + args.lambda_c*loss_simCLR + penalty 
-        loss_x += Lx.item()
-        loss_ucl += loss_simCLR.item()
+        # loss = Lx  + args.lambda_c*loss_simCLR + penalty
+        loss = Lx + args.lambda_c*loss_simCLR + penalty + reg_f_var_loss + loss_flow
 
         ## Compute gradient and do SGD step
         optimizer.zero_grad()
@@ -159,7 +163,7 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
 
         sys.stdout.write('\r')
         sys.stdout.write('%s: | Epoch [%3d/%3d] Iter[%3d/%3d]\t Labeled loss: %.2f  Contrative Loss:%.4f'
-                %(args.dataset,  epoch, args.num_epochs, batch_idx+1, num_iter, loss_x/(batch_idx+1), loss_ucl/(batch_idx+1)))
+                %(args.dataset,  epoch, args.num_epochs, batch_idx+1, num_iter, Lx, loss_simCLR))
         sys.stdout.flush()
 
         ## wandb
@@ -169,24 +173,40 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
             logMsg["loss/Lx"] = Lx.item()
             logMsg["loss/loss_simCLR"] = loss_simCLR.item()
             logMsg["loss/penalty"] = penalty.item()
+            logMsg["loss/reg_f_var_loss"] = reg_f_var_loss.item()
+            logMsg["loss/loss_flow"] = loss_flow.item()
 
 
-def warmup(net,optimizer,dataloader):
+def warmup(net, flowNet, optimizer, optimizer_flow,dataloader):
     net.train()
     for batch_idx, (inputs, labels, path) in enumerate(dataloader):      
         inputs, labels = inputs.cuda(), labels.cuda() 
         optimizer.zero_grad()
-        _ , outputs = net(inputs)              
+        optimizer_flow.zero_grad()
+        _ , outputs, feature_flow = net(inputs, get_feature = True)              
         loss = CEloss(outputs, labels)  
         
         penalty = conf_penalty(outputs)
-        L = loss + penalty       
+
+        # == flow ==
+        labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
+        flow_labels = labels_one_hot.unsqueeze(1).cuda()
+        delta_p = torch.zeros(flow_labels.shape[0], flow_labels.shape[1], 1).cuda()
+        approx21, delta_log_p2 = flowNet(flow_labels, feature_flow, delta_p)
+        
+        approx2 = standard_normal_logprob(approx21).view(flow_labels.size()[0], -1).sum(1, keepdim=True)
+        delta_log_p2 = delta_log_p2.view(flow_labels.size()[0], flow_labels.shape[1], 1).sum(1)
+        log_p2 = (approx2 - delta_log_p2)
+        loss_nll = -log_p2.mean()
+
+        L = loss + penalty + loss_nll    
         L.backward()  
-        optimizer.step() 
+        optimizer.step()
+        optimizer_flow.step()
 
         sys.stdout.write('\r')
-        sys.stdout.write('|Warm-up: Iter[%3d/%3d]\t CE-loss: %.4f  Conf-Penalty: %.4f'
-                %(batch_idx+1, args.num_batches, loss.item(), penalty.item()))
+        sys.stdout.write('|Warm-up: Iter[%3d/%3d]\t CE-loss: %.4f  Conf-Penalty: %.4f nll loss: %.4f'
+                %(batch_idx+1, args.num_batches, loss.item(), penalty.item(), loss_nll.item()))
         sys.stdout.flush()
 
         ## wandb
@@ -194,42 +214,51 @@ def warmup(net,optimizer,dataloader):
             logMsg = {}
             logMsg["epoch"] = epoch
             logMsg["loss/CEloss"] = loss.item()
+            logMsg["loss/nll"] = loss_nll.item()
             logMsg["loss/penalty"] = penalty.item()
     
-def val(net,val_loader,k):
+def val(net, flowNet,val_loader):
     net.eval()
+    flowNet.eval()
     correct = 0
     total = 0
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(val_loader):
             inputs, targets = inputs.cuda(), targets.cuda()
-            _ , outputs   = net(inputs)
+            _, logits, feature = net(inputs, get_feature=True)
+            out_net = torch.softmax(logits, dim=1)
+            out_flow = flowTrainer.predict(flowNet, feature)
+            outputs = (out_net + out_flow) / 2
             _ , predicted = torch.max(outputs, 1)         
                        
             total += targets.size(0)
             correct += predicted.eq(targets).cpu().sum().item()
 
     acc = 100.*correct/total
-    print("\n| Validation\t Net%d  Acc: %.2f%%" %(k,acc))  
-    if acc > best_acc[k-1]:
-        best_acc[k-1] = acc
-        print('| Saving Best Net%d ...'%k)
-        save_point = os.path.join(model_save_loc, '%s_net%d.pth.tar'%(args.id,k))
+    print("\n| Validation\t Net Acc: %.2f%%" %(acc))  
+    if acc > best_acc:
+        best_acc = acc
+        print('| Saving Best Net ...')
+        save_point = os.path.join(model_save_loc, 'clothing1m_net.pth.tar')
+        save_point_flow = os.path.join(model_save_loc, 'clothing1m_flow.pth.tar')
         torch.save(net.state_dict(), save_point)
+        torch.save(flowNet.state_dict(), save_point_flow)
     return acc
 
-def test(net1,net2,test_loader):
+def test(net, flowNet, test_loader):
     acc_meter.reset()
-    net1.eval()
-    net2.eval()
+    net.eval()
+    flowNet.eval()
     correct = 0
     total = 0
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(test_loader):
             inputs, targets = inputs.cuda(), targets.cuda()
-            _, outputs1  = net1(inputs)       
-            _, outputs2  = net2(inputs)           
-            outputs      = outputs1+outputs2
+            
+            _, logits, feature = net(inputs, get_feature=True)
+            out_net = torch.softmax(logits, dim=1)
+            out_flow = flowTrainer.predict(flowNet, feature)
+            outputs = (out_net + out_flow) / 2
             _, predicted = torch.max(outputs, 1)            
                        
             total   += targets.size(0)
@@ -255,9 +284,9 @@ class Jensen_Shannon(nn.Module):
         return 0.5*kl_divergence(p, m) + 0.5*kl_divergence(q, m)
 
 ## Calculate JSD
-def Calculate_JSD(epoch,model1, model2):
-    model1.eval()
-    model2.eval()
+def Calculate_JSD(epoch, net, flowNet):
+    net.eval()
+    flowNet.eval()
     num_samples = args.num_batches*args.batch_size
     prob = torch.zeros(num_samples)
     JS_dist = Jensen_Shannon()
@@ -269,11 +298,12 @@ def Calculate_JSD(epoch,model1, model2):
 
         ## Get the output of the Model
         with torch.no_grad():
-            out1 = torch.nn.Softmax(dim=1).cuda()(model1(inputs)[1])     
-            out2 = torch.nn.Softmax(dim=1).cuda()(model2(inputs)[1])
+            _, logits, feature = net(inputs, get_feature=True)
+            out_net = torch.softmax(logits, dim=1)
+            out_flow = flowTrainer.predict(flowNet, feature)
 
         ## Get the Prediction
-        out = 0.5*out1 + 0.5*out2          
+        out = 0.5*out_net + 0.5*out_flow          
 
         ## Divergence clculator to record the diff. between ground truth and output prob. dist.  
         dist = JS_dist(out,  F.one_hot(targets, num_classes = args.num_class))
@@ -327,17 +357,20 @@ log.flush()
 loader = dataloader.clothing_dataloader(root=args.data_path, batch_size=args.batch_size, warmup_batch_size = args.batch_size*2, num_workers=8, num_batches=args.num_batches)
 print('| Building Net')
 
+# flow model
+flowTrainer = FlowTrainer(args)
+flowNet = flowTrainer.create_model()
+
 model = get_model()
-net1  = create_model()
-net2  = create_model()
+net  = create_model()
 cudnn.benchmark = True
 
 ## Optimizer and Learning Rate Scheduler 
-optimizer1 = optim.SGD(net1.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-3)
-optimizer2 = optim.SGD(net2.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-3)
+optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-3)
+optimizer_flow = optim.SGD(flowNet.parameters(), lr=args.lr_f, momentum=0.9, weight_decay=1e-3)
 
-scheduler1 = optim.lr_scheduler.CosineAnnealingLR(optimizer1, 100, 1e-5)
-scheduler2 = optim.lr_scheduler.CosineAnnealingLR(optimizer2, 100, 1e-5)
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, 100, 1e-5)
+scheduler_flow = optim.lr_scheduler.CosineAnnealingLR(optimizer_flow, 100, args.lr_f / 100)
 
 ## Cross-Entropy and Other Losses
 CE     = nn.CrossEntropyLoss(reduction='none')
@@ -346,25 +379,21 @@ conf_penalty = NegEntropy()
 criterion    = SemiLoss()
 
 ## Warm-up Epochs (maximum value is 2, we recommend 0 or 1)
-warm_up = 0
+warm_up = args.warm_up
 
 ## Copy Saved Data
 if args.pretrained: 
     params  = model.named_parameters()
-    params1 = net1.named_parameters() 
-    params2 = net2.named_parameters()
+    params = net.named_parameters() 
 
-    dict_params2 = dict(params2)
-    dict_params1 = dict(params1)
+    dict_params = dict(params)
 
-    for name1, param in params:
-        if name1 in dict_params2:
-            dict_params2[name1].data.copy_(param.data)
-            dict_params1[name1].data.copy_(param.data)
-
+    for name, param in params:
+        if name in dict_params:
+            dict_params[name].data.copy_(param.data)
 
 ## Location for saving the models 
-folder = 'Clothing1M' + '_' + str(args.name)
+folder = 'Clothing1M_flow' + '_' + str(args.name)
 model_save_loc = './checkpoint/' + folder
 if not os.path.exists(model_save_loc):
     os.mkdir(model_save_loc)
@@ -377,18 +406,18 @@ if (wandb != None):
     wandb.define_metric("loss", summary="min")
     wandb.define_metric("acc/test", summary="max")
 
-net1 = nn.DataParallel(net1)
-net2 = nn.DataParallel(net2)
+net = nn.DataParallel(net)
+flowNet = nn.DataParallel(flowNet)
 
 ## Loading Saved Weights
-model_name_1 = 'clothing1m_net1.pth.tar'
-model_name_2 = 'clothing1m_net2.pth.tar'
+model_name = 'clothing1m_net.pth.tar'
+model_name_flow = 'clothing1m_flow.pth.tar'
 
 if args.resume:
-    net1.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_1)))
-    net2.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_2)))
+    net.load_state_dict(torch.load(os.path.join(model_save_loc, model_name)))
+    flowNet.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow)))
 
-best_acc = [0,0]
+best_acc = 0
 SR = 0
 torch.backends.cudnn.benchmark = True
 acc_meter = torchnet.meter.ClassErrorMeter(topk=[1,5], accuracy=True)
@@ -403,50 +432,30 @@ for epoch in range(0, args.num_epochs+1):
     if epoch<warm_up:             
         train_loader = loader.run(0,'warmup')
         print('Warmup Net1')
-        warmup(net1,optimizer1,train_loader)
-        
-        print('\nWarmup Net2')
-        train_loader = loader.run(0,'warmup')
-        warmup(net2, optimizer2, train_loader)
+        warmup(net, flowNet, optimizer, optimizer_flow,train_loader)
 
     else:
         num_samples = args.num_batches*args.batch_size
         eval_loader = loader.run(0.5,'eval_train')  
-        prob2, paths2 = Calculate_JSD(epoch, net1, net2)                          ## Calculate the JSD distances 
-        threshold   = torch.mean(prob2)                                           ## Simply Take the average as the threshold
-
-        SR = torch.sum(prob2<threshold).item()/prob2.size()[0]                    ## Calculate the Ratio of clean samples      
+        prob, paths = Calculate_JSD(epoch, net, flowNet)                          ## Calculate the JSD distances 
+        threshold   = torch.mean(prob)                                           ## Simply Take the average as the threshold
+        SR = torch.sum(prob<threshold).item()/prob.size()[0]                    ## Calculate the Ratio of clean samples      
         
         for i in range(nb_repeat):
-            print('\n\nTrain Net1')
-            labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob=prob2,  paths=paths2)         ## Uniform Selection
-            train(epoch, net1, net2, optimizer1, labeled_trainloader, unlabeled_trainloader)                        ## Train Net1
-            acc1 = val(net1,val_loader,1)
+            print('\n\nTrain Net')
+            labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob=prob,  paths=paths)         ## Uniform Selection
+            train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, unlabeled_trainloader)                        ## Train Net1
+            acc_val = val(net, flowNet,val_loader)
 
-        print('\n==== Net 1 evaluate next epoch training data loss ====') 
-        eval_loader   = loader.run(SR,'eval_train')
-        net1.load_state_dict(torch.load(os.path.join(model_save_loc, '%s_net1.pth.tar'%args.id)))
-        prob1, paths1 = Calculate_JSD(epoch,net2, net1)  
-        threshold     = torch.mean(prob1)
-        SR = torch.sum(prob1<threshold).item()/prob1.size()[0]
+    scheduler.step()
+    scheduler_flow.step()        
+    # acc_val = val(net,val_loader)
+    log.write('Validation Epoch:%d  Acc1:%.2f\n'%(epoch,acc_val))
 
-        for i in range(nb_repeat):
-            print('\nTrain Net2')
-            labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob=prob1, paths=paths1)           ## Uniform Selection
-            train(epoch,net2,net1,optimizer2,labeled_trainloader, unlabeled_trainloader)                             ## Train net2
-            acc2 = val(net2,val_loader,2)
-
-    scheduler1.step()
-    scheduler2.step()        
-    acc1 = val(net1,val_loader,1)
-    acc2 = val(net2,val_loader,2)   
-    log.write('Validation Epoch:%d  Acc1:%.2f  Acc2:%.2f\n'%(epoch,acc1,acc2))
-
-    net1.load_state_dict(torch.load(os.path.join(model_save_loc, '%s_net1.pth.tar'%args.id)))
-    net2.load_state_dict(torch.load(os.path.join(model_save_loc, '%s_net2.pth.tar'%args.id)))
+    net.load_state_dict(torch.load(os.path.join(model_save_loc, 'clothing1m_net.pth.tar')))
     log.flush() 
     test_loader = loader.run(0,'test')  
-    acc, accs = test(net1,net2,test_loader)   
+    acc_test, accs = test(net, flowNet, test_loader)   
     print('\n| Epoch:%d \t  Acc: %.2f%% (%.2f%%) \n'%(epoch,accs[0],accs[1]))
     log.write('Epoch:%d \t  Acc: %.2f%% (%.2f%%) \n'%(epoch,accs[0],accs[1]))
     log.flush()  
@@ -455,25 +464,6 @@ for epoch in range(0, args.num_epochs+1):
     if (wandb != None):
         logMsg = {}
         logMsg["epoch"] = epoch
-        logMsg["acc/test"] = acc
-        logMsg["acc/val"] = acc1
-        logMsg["acc/val2"] = acc2
+        logMsg["acc/test"] = acc_test
+        logMsg["acc/val"] = acc_val
         wandb.log(logMsg)
-
-    if epoch<warm_up: 
-        model_name_1 = 'Net1_warmup_pretrained.pth'     
-        model_name_2 = 'Net2_warmup_pretrained.pth' 
-
-        print("Save the Warmup Model --- --")
-        checkpoint1 = {
-            'net': net1.state_dict(),
-            'Model_number': 1,
-            'epoch': epoch,
-        }
-        checkpoint2 = {
-            'net': net2.state_dict(),
-            'Model_number': 2,
-            'epoch': epoch,
-        }
-        torch.save(checkpoint1, os.path.join(model_save_loc, model_name_1))
-        torch.save(checkpoint2, os.path.join(model_save_loc, model_name_2))   
