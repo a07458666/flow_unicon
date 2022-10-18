@@ -56,9 +56,6 @@ if args.dataset== 'cifar10' or args.dataset== 'cifar100':
 elif args.dataset=='TinyImageNet':
     from PreResNet_tiny import *
     from dataloader_tiny import tinyImagenet_dataloader as dataloader
-elif args.dataset=="Clothing1M":
-    from PreResNet_clothing1M import *
-    import dataloader_clothing1M as dataloader
 
 ## Checkpoint Location
 folder = args.dataset + '_' + args.noise_mode + '_' + str(args.ratio)  + '_flow_' + args.name

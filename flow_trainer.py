@@ -42,13 +42,12 @@ class FlowTrainer:
         self.contrastive_criterion = SupConLoss()
         
         ## CE Loss Functions
-        if self.args.w_ce:
-            self.CE       = nn.CrossEntropyLoss(reduction='none')
-            self.CEloss   = nn.CrossEntropyLoss()
-            self.MSE_loss = nn.MSELoss(reduction= 'none')
-            self.criterion  = SemiLoss()
-        if self.args.noise_mode=='asym':
-            self.conf_penalty = NegEntropy()
+        self.CE       = nn.CrossEntropyLoss(reduction='none')
+        self.CEloss   = nn.CrossEntropyLoss()
+        self.MSE_loss = nn.MSELoss(reduction= 'none')
+        self.criterion  = SemiLoss()
+
+        self.conf_penalty = NegEntropy()
         return
 
     ## For Standard Training 
@@ -75,8 +74,6 @@ class FlowTrainer:
             logFeature(feature_flow)            
 
             # == flow ==
-            feature_flow = F.normalize(feature_flow, dim=1)
-
             delta_p = torch.zeros(flow_labels.shape[0], flow_labels.shape[1], 1).cuda()
             approx21, delta_log_p2 = flownet(flow_labels, feature_flow, delta_p)
             
@@ -202,8 +199,6 @@ class FlowTrainer:
             ## Unsupervised Contrastive Loss
             f1, _ = net(inputs_u3)
             f2, _ = net(inputs_u4)
-            f1 = F.normalize(f1, dim=1)
-            f2 = F.normalize(f2, dim=1)
             features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
 
             loss_simCLR = self.contrastive_criterion(features)
@@ -233,7 +228,6 @@ class FlowTrainer:
                 loss_unicon = Lx + lamb * Lu + penalty
 
             ## Flow loss
-            flow_feature = F.normalize(flow_feature, dim=1)
             flow_mixed_target = mixed_target.unsqueeze(1).cuda()
             delta_p = torch.zeros(flow_mixed_target.shape[0], flow_mixed_target.shape[1], 1).cuda() 
             approx21, delta_log_p2 = flownet(flow_mixed_target, flow_feature, delta_p)
@@ -319,13 +313,11 @@ class FlowTrainer:
             ## Get outputs of both network
             with torch.no_grad():
                 _, _, feature = net(inputs, get_feature=True)
-                feature = F.normalize(feature, dim=1)
                 out1 = self.predict(flowNet, feature)
 
                 with self.net_ema.average_parameters():
                     with self.flowNet_ema .average_parameters():
                         _, _, feature2 = net(inputs, get_feature=True)
-                        feature2 = F.normalize(feature2, dim=1)
                         out2 = self.predict(flowNet, feature2)
 
             ## Get the Prediction
@@ -343,7 +335,6 @@ class FlowTrainer:
     def predict(self, flowNet, feature, mean = 0, std = 0, sample_n = 1, origin=False):
         with torch.no_grad():
             batch_size = feature.size()[0]
-            feature = F.normalize(feature, dim=1)
             feature = feature.repeat(sample_n, 1, 1)
             input_z = torch.normal(mean = mean, std = std, size=(sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
             delta_p = torch.zeros(input_z.shape[0], input_z.shape[1], 1).cuda()
@@ -360,7 +351,7 @@ class FlowTrainer:
             return probs_mean
 
     def testByFlow(self, epoch, net, flownet, test_loader):
-        print("Test")
+        print("\n====Test====\n")
         net.eval()
         flownet.eval()
         total = 0

@@ -164,9 +164,9 @@ class ResNet(nn.Module):
             feature_out = self.feature_head(out)
 
         if get_feature:
-            return ssl_out, class_out, ssl_out
+            return F.normalize(ssl_out, dim=1), class_out, F.normalize(feature_out, dim=1)
         else:
-            return ssl_out, class_out
+            return F.normalize(ssl_out, dim=1), class_out
 
 
 def ResNet18(num_classes=10):

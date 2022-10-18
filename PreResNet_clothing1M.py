@@ -1,5 +1,7 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
 # from .utils import load_state_dict_from_url
 
 
@@ -158,6 +160,7 @@ class ResNet(nn.Module):
         self.fc = nn.Linear(feature_dim * block.expansion, num_classes)
         self.projection_head = nn.Linear(feature_dim*block.expansion, 128)
         self.bnl = nn.BatchNorm1d(128)
+        self.feature_head = nn.Linear(feature_dim * block.expansion, 128)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -218,12 +221,12 @@ class ResNet(nn.Module):
         # x = self.fc(x)
 
         ssl_out = self.bnl(self.projection_head(x))
-        class_out = self.linear(x)
+        class_out = self.fc(x)
         feature_out = self.bnl(self.feature_head(x))
         if get_feature:
-            return ssl_out, class_out, feature_out
+            return F.normalize(ssl_out, dim=1), class_out, F.normalize(feature_out, dim=1)
         else:
-            return ssl_out, class_out
+            return F.normalize(ssl_out, dim=1), class_out
 
     def forward(self, x, get_feature=False):
         return self._forward_impl(x, get_feature)

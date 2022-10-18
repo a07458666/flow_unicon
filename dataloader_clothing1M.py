@@ -32,14 +32,14 @@ class clothing_dataset(Dataset):
             lines = f.read().splitlines()
             for l in lines:
                 entry = l.split()
-                img_path = "%s/" % self.root + entry[0][7:]
+                img_path = "%s/images/" % self.root + entry[0][7:]
                 self.train_labels[img_path] = int(entry[1])
 
         with open("%s/clean_label_kv.txt" % self.root, "r") as f:
             lines = f.read().splitlines()
             for l in lines:
                 entry = l.split()
-                img_path = "%s/" % self.root + entry[0][7:]
+                img_path = "%s/images/" % self.root + entry[0][7:]
                 self.test_labels[img_path] = int(entry[1])
         
         save_file = 'pred_idx_clothing1M_aug.npz'
@@ -48,7 +48,7 @@ class clothing_dataset(Dataset):
             with open("%s/noisy_train_key_list.txt" % self.root, "r") as f:
                 lines = f.read().splitlines()
                 for l in lines:
-                    img_path = "%s/" % self.root + l[7:]
+                    img_path = "%s/images/" % self.root + l[7:]
                     train_imgs.append(img_path)
             random.shuffle(train_imgs)
             class_num = torch.zeros(num_class)
@@ -107,14 +107,14 @@ class clothing_dataset(Dataset):
             with open("%s/clean_test_key_list.txt" % self.root, "r") as f:
                 lines = f.read().splitlines()
                 for l in lines:
-                    img_path = "%s/" % self.root + l[7:]
+                    img_path = "%s/images/" % self.root + l[7:]
                     self.test_imgs.append(img_path)
         elif mode == "val":
             self.val_imgs = []
             with open("%s/clean_val_key_list.txt" % self.root, "r") as f:
                 lines = f.read().splitlines()
                 for l in lines:
-                    img_path = "%s/" % self.root + l[7:]
+                    img_path = "%s/images/" % self.root + l[7:]
                     self.val_imgs.append(img_path)
 
     def __getitem__(self, index):
