@@ -7,4 +7,6 @@ lr: 2e-2
 lr_f: 2e-5
 warm_up: 30
 num_samples: 50000
-Tu: 0.2
+Tu: 0.5
+d_u: 0.7
+flow_modules: 64-64-64-64
