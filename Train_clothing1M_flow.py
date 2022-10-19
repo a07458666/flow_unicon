@@ -162,8 +162,8 @@ def train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, u
         optimizer.step()
 
         sys.stdout.write('\r')
-        sys.stdout.write('%s: | Epoch [%3d/%3d] Iter[%3d/%3d]\t Labeled loss: %.2f  Contrative Loss:%.4f'
-                %(args.dataset,  epoch, args.num_epochs, batch_idx+1, num_iter, Lx, loss_simCLR))
+        sys.stdout.write('%s: | Epoch [%3d/%3d] Iter[%3d/%3d]\t Labeled loss: %.2f  Contrative Loss:%.4f nll Loss:%.4f'
+                %(args.dataset,  epoch, args.num_epochs, batch_idx+1, num_iter, Lx, loss_simCLR, loss_flow))
         sys.stdout.flush()
 
         ## wandb
@@ -236,8 +236,8 @@ def val(net, flowNet,val_loader):
 
     acc = 100.*correct/total
     print("\n| Validation\t Net Acc: %.2f%%" %(acc))  
-    if acc > best_acc:
-        best_acc = acc
+    if acc > best_acc[0]:
+        best_acc[0] = acc
         print('| Saving Best Net ...')
         save_point = os.path.join(model_save_loc, 'clothing1m_net.pth.tar')
         save_point_flow = os.path.join(model_save_loc, 'clothing1m_flow.pth.tar')
@@ -417,7 +417,7 @@ if args.resume:
     net.load_state_dict(torch.load(os.path.join(model_save_loc, model_name)))
     flowNet.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow)))
 
-best_acc = 0
+best_acc = [0]
 SR = 0
 torch.backends.cudnn.benchmark = True
 acc_meter = torchnet.meter.ClassErrorMeter(topk=[1,5], accuracy=True)
