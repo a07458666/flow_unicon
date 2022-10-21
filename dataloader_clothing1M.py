@@ -200,7 +200,7 @@ class clothing_dataloader:
                 transforms.Resize(256),
                 transforms.RandomCrop(224),
                 transforms.RandomHorizontalFlip(),
-                ImageNetPolicy(),
+                CIFAR10Policy(),
                 transforms.ToTensor(),
                 transforms.Normalize((0.6959, 0.6537, 0.6371), (0.3113, 0.3192, 0.3214)),
             ]
