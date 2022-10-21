@@ -429,7 +429,6 @@ if not os.path.exists(model_save_loc):
 
 ## wandb
 if (wandb != None):
-    os.environ["WANDB_WATCH"] = "false"
     wandb.init(project="Clothing1M", entity="andy-su", name=folder)
     wandb.config.update(args)
     wandb.define_metric("loss", summary="min")
