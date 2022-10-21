@@ -12,6 +12,7 @@ import os
 import argparse
 import numpy as np
 import dataloader_clothing1M as dataloader
+from torch_ema import ExponentialMovingAverage
 
 from sklearn.mixture import GaussianMixture
 import copy 
@@ -41,7 +42,7 @@ parser.add_argument('--num_epochs', default=8, type=int)
 parser.add_argument('--id', default='clothing1m')
 parser.add_argument('--data_path', default='./data/Clothing1M_org', type=str, help='path to dataset')
 parser.add_argument('--seed', default=123)
-parser.add_argument('--gpuid', default=0, type=int)
+parser.add_argument('--gpuid', default="0", help='comma separated list of GPU(s) to use.')
 parser.add_argument('--pretrained', default=True, type=bool)
 parser.add_argument('--num_class', default=14, type=int)
 parser.add_argument('--num_batches', default=1000, type=int)
@@ -50,9 +51,13 @@ parser.add_argument('--resume', default=False, type=bool, help = 'Resume from th
 parser.add_argument('--warm_up', default=0, type=int)
 parser.add_argument('--name', default="", type=str)
 parser.add_argument('--flow_modules', default="256-256-256-256", type=str)
+parser.add_argument('--ema', action='store_true', help = 'Moving Average')
+parser.add_argument('--ema_decay', default=0.9, type=float, help='ema decay')
+parser.add_argument('--cond_size', default=512, type=int)
 args = parser.parse_args()
 
-torch.cuda.set_device(args.gpuid)
+# torch.cuda.set_device(args.gpuid)
+os.environ['CUDA_VISIBLE_DEVICES'] = args.gpuid
 random.seed(args.seed)
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed_all(args.seed)
@@ -90,22 +95,13 @@ def train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, u
         inputs_u, inputs_u2, inputs_u3, inputs_u4 = inputs_u.cuda(), inputs_u2.cuda(), inputs_u3.cuda(), inputs_u4.cuda()
         
         with torch.no_grad():
-            # Label co-guessing of unlabeled samples
-            pu_net, pu_flow = flowTrainer.get_pseudo_label(net, flowNet, inputs_u3, inputs_u4)
-            pu_net_sp = flowTrainer.sharpening(pu_net, args.T)  ## Temparature Sharpening
-            ptu = (pu_net_sp + pu_flow) / 2
+            targets_u, targets_x = get_pseudo_target(net, flowNet, w_x, labels_x, inputs_u3, inputs_u4, inputs_x3, inputs_x4)
+            with net_ema.average_parameters():
+                with flowNet_ema.average_parameters():
+                    targets_u_ema, targets_x_ema = get_pseudo_target(net, flowNet, w_x, labels_x, inputs_u3, inputs_u4, inputs_x3, inputs_x4)
             
-            targets_u = ptu / ptu.sum(dim=1, keepdim=True)   ## Normalize
-            targets_u = targets_u.detach()     
-
-            ## Label refinement of labeled samples
-            px_net, px_flow = flowTrainer.get_pseudo_label(net, flowNet, inputs_x3, inputs_x4)
-            px = (px_net + px_flow) / 2       
-            px = w_x*labels_x + (1-w_x)*px        
-            ptx = flowTrainer.sharpening(px, args.T)  ## Temparature Sharpening        
-                        
-            targets_x = ptx / ptx.sum(dim=1, keepdim=True)  ## normalize           
-            targets_x = targets_x.detach()
+        targets_u = (targets_u + targets_u_ema) / 2
+        targets_x = (targets_x + targets_x_ema) / 2
 
         ## Mixmatch
         l = np.random.beta(args.alpha, args.alpha)        
@@ -158,8 +154,13 @@ def train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, u
 
         ## Compute gradient and do SGD step
         optimizer.zero_grad()
+        optimizer_flow.zero_grad()
         loss.backward()
         optimizer.step()
+        optimizer_flow.step()
+        # EMA step
+        net_ema.update()
+        flowNet_ema.update()
 
         sys.stdout.write('\r')
         sys.stdout.write('%s: | Epoch [%3d/%3d] Iter[%3d/%3d]\t Labeled loss: %.2f  Contrative Loss:%.4f nll Loss:%.4f'
@@ -225,10 +226,11 @@ def val(net, flowNet,val_loader):
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(val_loader):
             inputs, targets = inputs.cuda(), targets.cuda()
-            _, logits, feature = net(inputs, get_feature=True)
-            out_net = torch.softmax(logits, dim=1)
-            out_flow = flowTrainer.predict(flowNet, feature)
-            outputs = (out_net + out_flow) / 2
+            outputs = predict(inputs)
+            with net_ema.average_parameters():
+                with flowNet_ema.average_parameters():
+                    outputs_ema = predict(inputs)
+            outputs = (outputs + outputs_ema) / 2
             _ , predicted = torch.max(outputs, 1)         
                        
             total += targets.size(0)
@@ -255,10 +257,11 @@ def test(net, flowNet, test_loader):
         for batch_idx, (inputs, targets) in enumerate(test_loader):
             inputs, targets = inputs.cuda(), targets.cuda()
             
-            _, logits, feature = net(inputs, get_feature=True)
-            out_net = torch.softmax(logits, dim=1)
-            out_flow = flowTrainer.predict(flowNet, feature)
-            outputs = (out_net + out_flow) / 2
+            outputs = predict(inputs)
+            with net_ema.average_parameters():
+                with flowNet_ema.average_parameters():
+                    outputs_ema = predict(inputs)
+            outputs = (outputs + outputs_ema) / 2
             _, predicted = torch.max(outputs, 1)            
                        
             total   += targets.size(0)
@@ -298,15 +301,14 @@ def Calculate_JSD(epoch, net, flowNet):
 
         ## Get the output of the Model
         with torch.no_grad():
-            _, logits, feature = net(inputs, get_feature=True)
-            out_net = torch.softmax(logits, dim=1)
-            out_flow = flowTrainer.predict(flowNet, feature)
-
-        ## Get the Prediction
-        out = 0.5*out_net + 0.5*out_flow          
-
+            outputs = predict(inputs)
+            with net_ema.average_parameters():
+                with flowNet_ema.average_parameters():
+                    outputs_ema = predict(inputs)
+            outputs = (outputs + outputs_ema) / 2
+       
         ## Divergence clculator to record the diff. between ground truth and output prob. dist.  
-        dist = JS_dist(out,  F.one_hot(targets, num_classes = args.num_class))
+        dist = JS_dist(outputs,  F.one_hot(targets, num_classes = args.num_class))
         prob[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = dist 
         
         for b in range(inputs.size(0)):
@@ -332,7 +334,7 @@ def get_model():
     return model 
 
 def create_model():
-    model = resnet50(num_classes=args.num_class)
+    model = resnet50(num_classes=args.num_class, feature_dim=args.cond_size)
     model = model.cuda()
     return model
 
@@ -340,6 +342,33 @@ def create_model():
 def linear_rampup(current, warm_up, rampup_length=5):
     current = np.clip((current-warm_up) / rampup_length, 0.0, 1.0)
     return args.lambda_u*float(current)
+
+## Predict
+def predict(inputs):
+    _, logits, feature = net(inputs, get_feature=True)
+    out_net = torch.softmax(logits, dim=1)
+    out_flow = flowTrainer.predict(flowNet, feature)
+    return (out_net + out_flow) / 2
+
+def get_pseudo_target(net, flowNet, w_x, labels_x, inputs_u3, inputs_u4, inputs_x3, inputs_x4):
+    # Label co-guessing of unlabeled samples
+    pu_net, pu_flow = flowTrainer.get_pseudo_label(net, flowNet, inputs_u3, inputs_u4)
+    pu_net_sp = flowTrainer.sharpening(pu_net, args.T)  ## Temparature Sharpening
+    ptu = (pu_net_sp + pu_flow) / 2
+    
+    targets_u = ptu / ptu.sum(dim=1, keepdim=True)   ## Normalize
+    targets_u = targets_u.detach()     
+
+    ## Label refinement of labeled samples
+    px_net, px_flow = flowTrainer.get_pseudo_label(net, flowNet, inputs_x3, inputs_x4)
+    px = (px_net + px_flow) / 2       
+    px = w_x*labels_x + (1-w_x)*px        
+    ptx = flowTrainer.sharpening(px, args.T)  ## Temparature Sharpening        
+                
+    targets_x = ptx / ptx.sum(dim=1, keepdim=True)  ## normalize           
+    targets_x = targets_x.detach()
+
+    return targets_u, targets_x
 
 ## Semi-Supervised Loss
 class SemiLoss(object):
@@ -409,6 +438,10 @@ if (wandb != None):
 net = nn.DataParallel(net)
 flowNet = nn.DataParallel(flowNet)
 
+# EMA
+net_ema = ExponentialMovingAverage(net.parameters(), decay=args.ema_decay)
+flowNet_ema = ExponentialMovingAverage(flowNet.parameters(), decay=args.ema_decay)
+
 ## Loading Saved Weights
 model_name = 'clothing1m_net.pth.tar'
 model_name_flow = 'clothing1m_flow.pth.tar'
@@ -431,9 +464,9 @@ for epoch in range(0, args.num_epochs+1):
 
     if epoch<warm_up:             
         train_loader = loader.run(0,'warmup')
-        print('Warmup Net1')
+        print('Warmup Net')
         warmup(net, flowNet, optimizer, optimizer_flow,train_loader)
-
+        acc_val = val(net,flowNet, val_loader)
     else:
         num_samples = args.num_batches*args.batch_size
         eval_loader = loader.run(0.5,'eval_train')  
@@ -444,7 +477,7 @@ for epoch in range(0, args.num_epochs+1):
         for i in range(nb_repeat):
             print('\n\nTrain Net')
             labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob=prob,  paths=paths)         ## Uniform Selection
-            train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, unlabeled_trainloader)                        ## Train Net1
+            train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, unlabeled_trainloader)                        ## Train Net
             acc_val = val(net, flowNet,val_loader)
 
     scheduler.step()
