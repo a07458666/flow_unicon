@@ -40,7 +40,7 @@ def argumentParse():
     parser.add_argument('--d_u',  default=0.5, type=float)
     parser.add_argument('--tau', default=5, type=float, help='filtering coefficient')
     parser.add_argument('--seed', default=123)
-    parser.add_argument('--gpuid', default=0, type=int)
+    parser.add_argument('--gpuid', default="0", help='comma separated list of GPU(s) to use.')
     parser.add_argument('--resume', action='store_true', help = 'Resume from the warmup checkpoint')
     parser.add_argument('--num_class', default=10, type=int)
     parser.add_argument('--data_path', default='./data/cifar10', type=str, help='path to dataset')
@@ -61,7 +61,8 @@ def argumentParse():
     parser.add_argument('--pretrained', action='store_true', help = 'pretrained(Clothing1M)')
     parser.add_argument('--split', action='store_true', help = 'split flow loss to x, u')
     parser.add_argument('--w_ce', action='store_true', help = 'train with cross entrioy')
-
+    parser.add_argument('--cond_size', default=128, type=int)
+    parser.add_argument('--isRealTask', default=False, type=bool, help='') 
     # load yaml
     _add_args_from_yaml(parser)
 
