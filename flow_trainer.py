@@ -34,7 +34,7 @@ class NegEntropy(object):
 class FlowTrainer:
     def __init__(self, args) -> None:
         self.args = args
-        self.cond_size = 128
+        self.cond_size = args.cond_size
         self.mean = 0
         self.std = 0.2
         self.sample_n = 1
@@ -145,9 +145,6 @@ class FlowTrainer:
 
             inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x = inputs_x.cuda(), inputs_x2.cuda(), inputs_x3.cuda(), inputs_x4.cuda(), labels_x.cuda(), w_x.cuda()
             inputs_u, inputs_u2, inputs_u3, inputs_u4 = inputs_u.cuda(), inputs_u2.cuda(), inputs_u3.cuda(), inputs_u4.cuda()
-            
-            labels_x_o = labels_x_o.cuda()
-            labels_u_o = labels_u_o.cuda()
 
             with torch.no_grad():
                 # Label co-guessing of unlabeled samples
@@ -161,7 +158,6 @@ class FlowTrainer:
                 pu_net, pu_flow = self.get_pseudo_label(net, flownet, inputs_u, inputs_u2, std = self.args.pseudo_std)
                 pu_net_sp = self.sharpening(pu_net, self.args.Tu)
                 pu_flow_sp = self.sharpening(pu_flow, lamb_Tu)
-                self.log_pu((pu_flow_sp + pu_flow_ema_sp) / 2, (pu_net_sp + pu_net_ema_sp) / 2, labels_u_o, epoch)
                 
                 ## Pseudo-label
                 if self.args.w_ce:
@@ -187,14 +183,20 @@ class FlowTrainer:
                 targets_x = self.sharpening(px_mix, self.args.Tx)        
                 targets_x = targets_x.detach()
 
-                self.print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, epoch)
+                if not self.args.isRealTask:
+                    labels_x_o = labels_x_o.cuda()
+                    labels_u_o = labels_u_o.cuda()
 
-                # logFeature(torch.cat([features_u11_flow, features_u12_flow, features_x_flow, features_x2_flow], dim=0))
+                    self.log_pu((pu_flow_sp + pu_flow_ema_sp) / 2, (pu_net_sp + pu_net_ema_sp) / 2, labels_u_o, epoch)
+                    
+                    self.print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, epoch)
 
-                # Calculate label sources
-                u_sources_pseudo = js_distance(targets_u, labels_u_o, self.args.num_class)
-                x_sources_origin = js_distance(labels_x, labels_x_o, self.args.num_class)
-                x_sources_refine = js_distance(targets_x, labels_x_o, self.args.num_class)
+                    # logFeature(torch.cat([features_u11_flow, features_u12_flow, features_x_flow, features_x2_flow], dim=0))
+
+                    # Calculate label sources
+                    u_sources_pseudo = js_distance(targets_u, labels_u_o, self.args.num_class)
+                    x_sources_origin = js_distance(labels_x, labels_x_o, self.args.num_class)
+                    x_sources_refine = js_distance(targets_x, labels_x_o, self.args.num_class)
 
             ## Unsupervised Contrastive Loss
             f1, _ = net(inputs_u3)

@@ -38,7 +38,8 @@ args = argumentParse()
 print("args : ",vars(args))
 
 ## GPU Setup
-torch.cuda.set_device(args.gpuid)
+os.environ['CUDA_VISIBLE_DEVICES'] = args.gpuid
+# torch.cuda.set_device(args.gpuid)
 random.seed(args.seed)
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed_all(args.seed)
@@ -56,9 +57,16 @@ if args.dataset== 'cifar10' or args.dataset== 'cifar100':
 elif args.dataset=='TinyImageNet':
     from PreResNet_tiny import *
     from dataloader_tiny import tinyImagenet_dataloader as dataloader
+elif args.dataset=='WebVision':
+    from InceptionResNetV2 import *
+    from dataloader_webvision import webvision_dataloader as dataloader
 
 ## Checkpoint Location
-folder = args.dataset + '_' + args.noise_mode + '_' + str(args.ratio)  + '_flow_' + args.name
+if  args.isRealTask:
+    folder = args.dataset +  '_flow_' + args.name
+else:
+    folder = args.dataset + '_' + args.noise_mode + '_' + str(args.ratio)  + '_flow_' + args.name
+
 model_save_loc = './checkpoint/' + folder
 if not os.path.exists(model_save_loc):
     os.mkdir(model_save_loc)
@@ -193,7 +201,11 @@ class NegEntropy(object):
         return torch.mean(torch.sum(probs.log()*probs, dim=1))
 
 def create_model():
-    model = ResNet18(num_classes=args.num_class)
+    
+    if args.dataset=='WebVision':
+        model = InceptionResNetV2(num_classes=args.num_class, feature_dim=args.cond_size)
+    else:
+        model = ResNet18(num_classes=args.num_class, feature_dim=args.cond_size)
     model = model.cuda()
     return model
 
@@ -306,7 +318,8 @@ if args.dataset== 'cifar10' or args.dataset== 'cifar100':
         root_dir=model_save_loc, noise_file='%s/clean_%.4f_%s.npz'%(args.data_path,args.ratio, args.noise_mode))
 elif args.dataset== 'TinyImageNet':
     loader = dataloader(root=args.data_path, batch_size=args.batch_size, num_workers=4, ratio = args.ratio, noise_mode = args.noise_mode, noise_file='%s/clean_%.2f_%s.npz'%(args.data_path,args.ratio, args.noise_mode))
-
+elif args.dataset == 'WebVision':
+    loader = dataloader(batch_size=args.batch_size,num_workers=5,root_dir=args.data_path, num_class=args.num_class)
 
 print('| Building net')
 net = create_model()
@@ -314,6 +327,10 @@ net = create_model()
 # flow model
 flowTrainer = FlowTrainer(args)
 flowNet = flowTrainer.create_model()
+
+# gpus
+# net = nn.DataParallel(net)
+# flowNet = nn.DataParallel(flowNet)
 
 cudnn.benchmark = True
 
@@ -356,7 +373,8 @@ for epoch in range(start_epoch,args.num_epochs+1):
     test_loader = loader.run(0, 'val')
     eval_loader = loader.run(0, 'eval_train')   
     warmup_trainloader = loader.run(0,'warmup')
-    
+        
+    print("Data Size : ", len(warmup_trainloader.dataset))
     ## Warmup Stage 
     if epoch<args.warm_up:       
         warmup_trainloader = loader.run(0, 'warmup')
