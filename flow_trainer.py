@@ -119,8 +119,12 @@ class FlowTrainer:
                 wandb.log(logMsg)
 
             sys.stdout.write('\r')
-            sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t NLL-loss: %.4f'
-                    %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
+            if self.args.isRealTask:
+                sys.stdout.write('%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t NLL-loss: %.4f'
+                        %(self.args.dataset, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
+            else:
+                sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t NLL-loss: %.4f'
+                        %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
             sys.stdout.flush()
 
     def train(self, epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader):
@@ -334,7 +338,7 @@ class FlowTrainer:
         model = model.cuda()
         return model
 
-    def predict(self, flowNet, feature, mean = 0, std = 0.2, sample_n = 50, origin=False):
+    def predict(self, flowNet, feature, mean = 0, std = 0.2, sample_n = 50):
         with torch.no_grad():
             batch_size = feature.size()[0]
             feature = feature.repeat(sample_n, 1, 1)
@@ -348,8 +352,6 @@ class FlowTrainer:
             probs = probs.view(sample_n, -1, self.args.num_class)
             probs_mean = torch.mean(probs, dim=0, keepdim=False)
             probs_mean = F.normalize(probs_mean, dim=1, p=1)
-            if origin:
-                return approx21.detach().squeeze(1)
             return probs_mean
 
     def testByFlow(self, epoch, net, flownet, test_loader):
@@ -374,12 +376,12 @@ class FlowTrainer:
                 inputs, targets = inputs.cuda(), targets.cuda()
 
                 _, logits, feature = net(inputs, get_feature = True)
-                outputs = self.predict(flownet, feature, origin=True)
+                outputs = self.predict(flownet, feature)
 
                 with self.net_ema.average_parameters():
                     with self.flowNet_ema.average_parameters():
                         _, logits_ema, feature_ema = net(inputs, get_feature = True)
-                        outputs_ema = self.predict(flownet, feature_ema, origin=True)
+                        outputs_ema = self.predict(flownet, feature_ema)
                 
                 logits = (logits + logits_ema) / 2  
                 outputs = (outputs + outputs_ema) / 2

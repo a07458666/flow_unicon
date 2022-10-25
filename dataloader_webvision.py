@@ -8,7 +8,8 @@ import torch
 import os
 
 class imagenet_dataset(Dataset):
-    def __init__(self, root_dir, transform, num_class):
+    def __init__(self, sample_ratio, root_dir, transform, num_class):
+        self.sample_ratio = sample_ratio
         self.root = root_dir+'imagenet/val/'
         self.transform = transform
         self.val_data = []
@@ -28,11 +29,13 @@ class imagenet_dataset(Dataset):
         return len(self.val_data)
 
 class webvision_dataset(Dataset): 
-    def __init__(self, root_dir, transform, mode, num_class, pred=[], probability=[]): 
+    def __init__(self, sample_ratio, root_dir, transform, mode, num_class, pred=[], probability=[]): 
         self.root = root_dir
         self.transform = transform
         self.mode = mode  
-     
+        
+        num_samples = 65944
+
         if self.mode=='val':
             with open(self.root+'info/val_filelist.txt') as f:
                 lines=f.readlines()
@@ -54,19 +57,43 @@ class webvision_dataset(Dataset):
                 target = int(target)
                 if target<num_class:
                     train_imgs.append(img)
-                    self.train_labels[img]=target            
+                    self.train_labels[img]=target
+            save_file = 'Clean_index_webvision.npz'     
             if self.mode == 'all':
                 self.train_imgs = train_imgs
             else:                   
+                # if self.mode == "labeled":
+                #     pred_idx = pred.nonzero()[0]
+                #     self.train_imgs = [train_imgs[i] for i in pred_idx]                
+                #     self.probability = [probability[i] for i in pred_idx]            
+                #     print("%s data has a size of %d"%(self.mode,len(self.train_imgs)))                                 
+                # elif self.mode == "unlabeled":
+                #     pred_idx = (1-pred).nonzero()[0]                                               
+                #     self.train_imgs = [train_imgs[i] for i in pred_idx]                           
+                #     print("%s data has a size of %d"%(self.mode,len(self.train_imgs)))   
                 if self.mode == "labeled":
-                    pred_idx = pred.nonzero()[0]
-                    self.train_imgs = [train_imgs[i] for i in pred_idx]                
-                    self.probability = [probability[i] for i in pred_idx]            
-                    print("%s data has a size of %d"%(self.mode,len(self.train_imgs)))                                 
+                    sorted_indices  = np.argsort(probability.cpu().numpy())
+                    print("sorted_indices :", sorted_indices)
+                    clean_count = int(sample_ratio*num_samples)
+                    print("clean_count :", clean_count)
+                    pred_idx = sorted_indices[:clean_count].cpu().numpy()
+                    print("pred_idx :", pred_idx)
+                    # refine probability
+                    self.origin_prob = torch.clone(probability)
+                    probability[probability<0.5] = 0
+                    self.probability = [1-probability[i] for i in pred_idx]
+
+                    self.train_imgs  = [train_imgs[i] for i in pred_idx]
+                    print("%s data has a size of %d"%(self.mode,len(self.train_imgs)))
                 elif self.mode == "unlabeled":
-                    pred_idx = (1-pred).nonzero()[0]                                               
-                    self.train_imgs = [train_imgs[i] for i in pred_idx]                           
-                    print("%s data has a size of %d"%(self.mode,len(self.train_imgs)))            
+                    pred_idx_load = np.load(save_file)['index']
+                    idx = list(range(num_samples))
+                    pred_idx = [x for x in idx if x not in pred_idx_load]
+                    self.train_imgs = [train_imgs[i] for i in pred_idx] 
+                    print("%s data has a size of %d"%(self.mode,len(self.train_imgs)))
+
+
+
                     
     def __getitem__(self, index):
         if self.mode=='labeled':
@@ -163,7 +190,7 @@ class webvision_dataloader():
 
     def run(self, sample_ratio, mode,pred=[],prob=[]):
         if mode=='warmup':
-            all_dataset = webvision_dataset(root_dir=self.root_dir, transform=self.transforms_train["warmup"], mode="all", num_class=self.num_class)                
+            all_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transforms_train["warmup"], mode="all", num_class=self.num_class)                
             trainloader = DataLoader(
                 dataset=all_dataset, 
                 batch_size=self.batch_size*2,
@@ -173,7 +200,7 @@ class webvision_dataloader():
             return trainloader
                                      
         elif mode=='train':
-            labeled_dataset = webvision_dataset(root_dir=self.root_dir, transform=self.transforms_train["labeled"], mode="labeled",num_class=self.num_class,pred=pred,probability=prob)              
+            labeled_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transforms_train["labeled"], mode="labeled",num_class=self.num_class,pred=pred,probability=prob)              
             labeled_trainloader = DataLoader(
                 dataset=labeled_dataset, 
                 batch_size=self.batch_size,
@@ -181,7 +208,7 @@ class webvision_dataloader():
                 num_workers=self.num_workers,
                 pin_memory=True)        
             
-            unlabeled_dataset = webvision_dataset(root_dir=self.root_dir, transform=self.transforms_train["unlabeled"], mode="unlabeled",num_class=self.num_class,pred=pred)                    
+            unlabeled_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transforms_train["unlabeled"], mode="unlabeled",num_class=self.num_class,pred=pred)                    
             unlabeled_trainloader = DataLoader(
                 dataset=unlabeled_dataset, 
                 batch_size=self.batch_size,
@@ -191,7 +218,7 @@ class webvision_dataloader():
             return labeled_trainloader, unlabeled_trainloader
         
         elif mode=='val':
-            val_dataset = webvision_dataset(root_dir=self.root_dir, transform=self.transform_test, mode='val', num_class=self.num_class)      
+            val_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transform_test, mode='val', num_class=self.num_class)      
             val_loader = DataLoader(
                 dataset=val_dataset, 
                 batch_size=self.batch_size*2,
@@ -201,7 +228,7 @@ class webvision_dataloader():
             return val_loader
         
         elif mode=='eval_train':
-            eval_dataset = webvision_dataset(root_dir=self.root_dir, transform=self.transform_test, mode='all', num_class=self.num_class)      
+            eval_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transform_test, mode='all', num_class=self.num_class)      
             eval_loader = DataLoader(
                 dataset=eval_dataset, 
                 batch_size=self.batch_size*2,
@@ -211,7 +238,7 @@ class webvision_dataloader():
             return eval_loader     
         
         elif mode=='imagenet':
-            imagenet_val = imagenet_dataset(root_dir=self.root_dir, transform=self.transform_imagenet, num_class=self.num_class)      
+            imagenet_val = imagenet_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transform_imagenet, num_class=self.num_class)      
             imagenet_loader = DataLoader(
                 dataset=imagenet_val, 
                 batch_size=self.batch_size*20,

@@ -60,7 +60,7 @@ def argumentParse():
     parser.add_argument('--clip_grad', action='store_true', help = 'cliping grad')
     parser.add_argument('--pretrained', action='store_true', help = 'pretrained(Clothing1M)')
     parser.add_argument('--split', action='store_true', help = 'split flow loss to x, u')
-    parser.add_argument('--w_ce', action='store_true', help = 'train with cross entrioy')
+    parser.add_argument('--w_ce', action='store_false', help = 'train with cross entrioy')
     parser.add_argument('--cond_size', default=128, type=int)
     parser.add_argument('--isRealTask', default=False, type=bool, help='') 
     # load yaml
