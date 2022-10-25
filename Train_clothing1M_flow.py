@@ -440,14 +440,14 @@ warm_up = args.warm_up
 
 ## Copy Saved Data
 if args.pretrained: 
-    params  = model.named_parameters()
-    params = net.named_parameters() 
+    params_model  = model.named_parameters()
+    params_net = net.named_parameters() 
 
-    dict_params = dict(params)
+    dict_params_net = dict(params_net)
 
-    for name, param in params:
-        if name in dict_params:
-            dict_params[name].data.copy_(param.data)
+    for name, param in params_model:
+        if name in dict_params_net:
+            dict_params_net[name].data.copy_(param.data)
 
 ## Location for saving the models 
 folder = 'Clothing1M_flow' + '_' + str(args.name)
