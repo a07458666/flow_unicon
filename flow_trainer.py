@@ -334,7 +334,7 @@ class FlowTrainer:
         model = model.cuda()
         return model
 
-    def predict(self, flowNet, feature, mean = 0, std = 0, sample_n = 1, origin=False):
+    def predict(self, flowNet, feature, mean = 0, std = 0.2, sample_n = 50, origin=False):
         with torch.no_grad():
             batch_size = feature.size()[0]
             feature = feature.repeat(sample_n, 1, 1)

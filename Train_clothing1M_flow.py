@@ -13,7 +13,7 @@ import argparse
 import numpy as np
 import dataloader_clothing1M as dataloader
 from torch_ema import ExponentialMovingAverage
-
+import time
 from sklearn.mixture import GaussianMixture
 import copy 
 import torchnet
@@ -34,7 +34,7 @@ except ImportError:
 parser = argparse.ArgumentParser(description='PyTorch Clothing1M Training')
 parser.add_argument('--batch_size', default=32, type=int, help='train batchsize') 
 parser.add_argument('--lr', '--learning_rate', default=0.002, type=float, help='initial learning rate')   ## Set the learning rate to 0.005 for faster training at the beginning
-parser.add_argument('--lr_f', default=2e-6, type=float, help='initial flow learning rate')
+parser.add_argument('--lr_f', default=2e-5, type=float, help='initial flow learning rate')
 parser.add_argument('--alpha', default=0.5, type=float, help='parameter for Beta')
 parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
 parser.add_argument('--T', default=0.5, type=float, help='sharpening temperature')
@@ -51,7 +51,6 @@ parser.add_argument('--resume', default=False, type=bool, help = 'Resume from th
 parser.add_argument('--warm_up', default=0, type=int)
 parser.add_argument('--name', default="", type=str)
 parser.add_argument('--flow_modules', default="256-256-256-256", type=str)
-parser.add_argument('--ema', action='store_true', help = 'Moving Average')
 parser.add_argument('--ema_decay', default=0.9, type=float, help='ema decay')
 parser.add_argument('--cond_size', default=512, type=int)
 args = parser.parse_args()
@@ -221,21 +220,34 @@ def warmup(net, flowNet, optimizer, optimizer_flow,dataloader):
 def val(net, flowNet,val_loader):
     net.eval()
     flowNet.eval()
+    correct_net = 0
+    correct_flow = 0
     correct = 0
     total = 0
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(val_loader):
             inputs, targets = inputs.cuda(), targets.cuda()
-            outputs = predict(inputs)
+            outputs, outputs_net, outputs_flow = predict(inputs, flowNet, getPre = True)
             with net_ema.average_parameters():
                 with flowNet_ema.average_parameters():
-                    outputs_ema = predict(inputs)
+                    outputs_ema, outputs_ema_net, outputs_ema_flow = predict(inputs, flowNet, getPre = True)
+            
+            outputs_net = (outputs_net + outputs_ema_net) / 2
+            outputs_flow = (outputs_flow + outputs_ema_flow) / 2
             outputs = (outputs + outputs_ema) / 2
-            _ , predicted = torch.max(outputs, 1)         
-                       
-            total += targets.size(0)
-            correct += predicted.eq(targets).cpu().sum().item()
 
+            total += targets.size(0)
+
+            _ , predicted_net = torch.max(outputs_net, 1)
+            correct_net += predicted_net.eq(targets).cpu().sum().item()
+
+            _ , predicted_flow = torch.max(outputs_flow, 1)
+            correct_flow += predicted_flow.eq(targets).cpu().sum().item()           
+            _ , predicted = torch.max(outputs, 1)
+            correct += predicted.eq(targets).cpu().sum().item()        
+            
+    acc_net = 100.*correct_net/total
+    acc_flow = 100.*correct_flow/total
     acc = 100.*correct/total
     print("\n| Validation\t Net Acc: %.2f%%" %(acc))  
     if acc > best_acc[0]:
@@ -245,33 +257,47 @@ def val(net, flowNet,val_loader):
         save_point_flow = os.path.join(model_save_loc, 'clothing1m_flow.pth.tar')
         torch.save(net.state_dict(), save_point)
         torch.save(flowNet.state_dict(), save_point_flow)
-    return acc
+    return acc, acc_net, acc_flow
 
 def test(net, flowNet, test_loader):
     acc_meter.reset()
     net.eval()
     flowNet.eval()
+    correct_net = 0
+    correct_flow = 0
     correct = 0
     total = 0
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(test_loader):
             inputs, targets = inputs.cuda(), targets.cuda()
             
-            outputs = predict(inputs)
+            outputs, outputs_net, outputs_flow = predict(inputs, flowNet, getPre = True)
             with net_ema.average_parameters():
                 with flowNet_ema.average_parameters():
-                    outputs_ema = predict(inputs)
+                    outputs_ema, outputs_ema_net, outputs_ema_flow = predict(inputs, flowNet, getPre = True)
+
+            outputs_net = (outputs_net + outputs_ema_net) / 2
+            outputs_flow = (outputs_flow + outputs_ema_flow) / 2
             outputs = (outputs + outputs_ema) / 2
-            _, predicted = torch.max(outputs, 1)            
-                       
+
             total   += targets.size(0)
-            correct += predicted.eq(targets).cpu().sum().item()        
+
+            _ , predicted_net = torch.max(outputs_net, 1)
+            correct_net += predicted_net.eq(targets).cpu().sum().item()
+
+            _ , predicted_flow = torch.max(outputs_flow, 1)
+            correct_flow += predicted_flow.eq(targets).cpu().sum().item()           
+            _ , predicted = torch.max(outputs, 1)
+            correct += predicted.eq(targets).cpu().sum().item()           
+   
             acc_meter.add(outputs,targets)
             
+    acc_net = 100.*correct_net/total
+    acc_flow = 100.*correct_flow/total
     acc = 100.*correct/total
     print("\n| Test Acc: %.2f%%\n" %(acc))  
     accs = acc_meter.value()
-    return acc , accs   
+    return acc , accs, acc_net, acc_flow
 
 ## Calculate the KL Divergence
 def kl_divergence(p, q):
@@ -298,13 +324,12 @@ def Calculate_JSD(epoch, net, flowNet):
     for batch_idx, (inputs, targets, path) in enumerate(eval_loader):
         inputs, targets = inputs.cuda(), targets.cuda() 
         batch_size      = inputs.size()[0]
-
         ## Get the output of the Model
         with torch.no_grad():
-            outputs = predict(inputs)
+            outputs = predict(inputs, flowNet)
             with net_ema.average_parameters():
                 with flowNet_ema.average_parameters():
-                    outputs_ema = predict(inputs)
+                    outputs_ema = predict(inputs, flowNet)
             outputs = (outputs + outputs_ema) / 2
        
         ## Divergence clculator to record the diff. between ground truth and output prob. dist.  
@@ -344,11 +369,14 @@ def linear_rampup(current, warm_up, rampup_length=5):
     return args.lambda_u*float(current)
 
 ## Predict
-def predict(inputs):
+def predict(inputs, flowNet, getPre = False):
     _, logits, feature = net(inputs, get_feature=True)
     out_net = torch.softmax(logits, dim=1)
     out_flow = flowTrainer.predict(flowNet, feature)
-    return (out_net + out_flow) / 2
+    if getPre:
+        return (out_net + out_flow) / 2, out_net, out_flow
+    else:    
+        return (out_net + out_flow) / 2
 
 def get_pseudo_target(net, flowNet, w_x, labels_x, inputs_u3, inputs_u4, inputs_x3, inputs_x4):
     # Label co-guessing of unlabeled samples
@@ -455,7 +483,8 @@ torch.backends.cudnn.benchmark = True
 acc_meter = torchnet.meter.ClassErrorMeter(topk=[1,5], accuracy=True)
 nb_repeat = 2
 
-for epoch in range(0, args.num_epochs+1):   
+for epoch in range(0, args.num_epochs+1):
+    startTime = time.time() 
     val_loader = loader.run(0, 'val')
     
     if epoch>100:
@@ -465,7 +494,7 @@ for epoch in range(0, args.num_epochs+1):
         train_loader = loader.run(0,'warmup')
         print('Warmup Net')
         warmup(net, flowNet, optimizer, optimizer_flow,train_loader)
-        acc_val = val(net,flowNet, val_loader)
+        acc_val, acc_val_net, acc_val_flow = val(net,flowNet, val_loader)
     else:
         num_samples = args.num_batches*args.batch_size
         eval_loader = loader.run(0.5,'eval_train')  
@@ -477,7 +506,7 @@ for epoch in range(0, args.num_epochs+1):
             print('\n\nTrain Net')
             labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob=prob,  paths=paths)         ## Uniform Selection
             train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, unlabeled_trainloader)                        ## Train Net
-            acc_val = val(net, flowNet,val_loader)
+            acc_val, acc_val_net, acc_val_flow = val(net, flowNet,val_loader)
 
     scheduler.step()
     scheduler_flow.step()        
@@ -487,7 +516,7 @@ for epoch in range(0, args.num_epochs+1):
     net.load_state_dict(torch.load(os.path.join(model_save_loc, 'clothing1m_net.pth.tar')))
     log.flush() 
     test_loader = loader.run(0,'test')  
-    acc_test, accs = test(net, flowNet, test_loader)   
+    acc_test, accs, acc_test_net, acc_test_flow = test(net, flowNet, test_loader)   
     print('\n| Epoch:%d \t  Acc: %.2f%% (%.2f%%) \n'%(epoch,accs[0],accs[1]))
     log.write('Epoch:%d \t  Acc: %.2f%% (%.2f%%) \n'%(epoch,accs[0],accs[1]))
     log.flush()  
@@ -496,6 +525,11 @@ for epoch in range(0, args.num_epochs+1):
     if (wandb != None):
         logMsg = {}
         logMsg["epoch"] = epoch
+        logMsg["runtime"] = time.time() - startTime
         logMsg["acc/test"] = acc_test
+        logMsg["acc/test_net"] = acc_test_net
+        logMsg["acc/test_flow"] = acc_test_flow
         logMsg["acc/val"] = acc_val
+        logMsg["acc/val_net"] = acc_val_net
+        logMsg["acc/val_flow"] = acc_val_flow
         wandb.log(logMsg)
