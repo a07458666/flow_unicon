@@ -255,10 +255,7 @@ def val(net, flowNet,val_loader):
     if acc > best_acc[0]:
         best_acc[0] = acc
         print('| Saving Best Net ...')
-        save_point = os.path.join(model_save_loc, 'clothing1m_net.pth.tar')
-        save_point_flow = os.path.join(model_save_loc, 'clothing1m_flow.pth.tar')
-        torch.save(net.state_dict(), save_point)
-        torch.save(flowNet.state_dict(), save_point_flow)
+        save_model()
     return acc, acc_net, acc_flow
 
 def test(net, flowNet, test_loader):
@@ -440,6 +437,23 @@ def logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloa
 
         wandb.log(logMsg)
 
+def load_model():
+    net.load_state_dict(torch.load(os.path.join(model_save_loc, model_name)))
+    flowNet.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow)))
+    net_ema.load_state_dict(torch.load(os.path.join(model_save_loc, model_ema_name)))
+    flowNet_ema.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_ema_flow)))
+
+def save_model():
+    save_point = os.path.join(model_save_loc, model_name)
+    save_point_flow = os.path.join(model_save_loc, model_name_flow)
+    save_point_ema = os.path.join(model_save_loc, model_ema_name)
+    save_point_ema_flow = os.path.join(model_save_loc, model_name_ema_flow)
+    torch.save(net.state_dict(), save_point)
+    torch.save(flowNet.state_dict(), save_point_flow)
+    torch.save(net_ema.state_dict(), save_point_ema)
+    torch.save(flowNet_ema.state_dict(), save_point_ema_flow)
+
+
 ## Semi-Supervised Loss
 class SemiLoss(object):
     def __call__(self, outputs_x, targets_x, outputs_u, targets_u, epoch, warm_up):
@@ -515,10 +529,11 @@ flowNet_ema = ExponentialMovingAverage(flowNet.parameters(), decay=args.ema_deca
 ## Loading Saved Weights
 model_name = 'clothing1m_net.pth.tar'
 model_name_flow = 'clothing1m_flow.pth.tar'
+model_ema_name = 'clothing1m_net_ema.pth.tar'
+model_name_ema_flow = 'clothing1m_flow_ema.pth.tar'
 
 if args.resume:
-    net.load_state_dict(torch.load(os.path.join(model_save_loc, model_name)))
-    flowNet.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow)))
+    load_model()
 
 best_acc = [0]
 SR = 0
@@ -558,8 +573,9 @@ for epoch in range(0, args.num_epochs+1):
     scheduler_flow.step()        
     # acc_val = val(net,val_loader)
     log.write('Validation Epoch:%d  Acc1:%.2f\n'%(epoch,acc_val))
+    
+    load_model()
 
-    net.load_state_dict(torch.load(os.path.join(model_save_loc, 'clothing1m_net.pth.tar')))
     log.flush() 
     test_loader = loader.run(0,'test')  
     acc_test, accs, acc_test_net, acc_test_flow = test(net, flowNet, test_loader)   
