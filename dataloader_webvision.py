@@ -84,14 +84,15 @@ class webvision_dataset(Dataset):
                     self.origin_prob = torch.clone(probability)
                     probability[probability<0.5] = 0
                     self.probability = [1-probability[i] for i in pred_idx]
-
                     self.train_imgs  = [train_imgs[i] for i in pred_idx]
+                    self.pred_idx = pred_idx
                     print("%s data has a size of %d"%(self.mode,len(self.train_imgs)))
                 elif self.mode == "unlabeled":
                     pred_idx_load = np.load(save_file)['index']
                     idx = list(range(num_samples))
                     pred_idx = [x for x in idx if x not in pred_idx_load]
-                    self.train_imgs = [train_imgs[i] for i in pred_idx] 
+                    self.train_imgs = [train_imgs[i] for i in pred_idx]
+                    self.pred_idx = pred_idx
                     print("%s data has a size of %d"%(self.mode,len(self.train_imgs)))
 
 

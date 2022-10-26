@@ -19,6 +19,7 @@ import copy
 import torchnet
 from Contrastive_loss import *
 from PreResNet_clothing1M import *
+import matplotlib.pyplot as plt
 
 # flow
 from flow_trainer import FlowTrainer
@@ -399,6 +400,46 @@ def get_pseudo_target(net, flowNet, w_x, labels_x, inputs_u3, inputs_u4, inputs_
 
     return targets_u, targets_x
 
+def logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
+    labeled_idx = labeled_trainloader.dataset.pred_idx
+    unlabeled_idx = unlabeled_trainloader.dataset.pred_idx
+    origin_prob =  labeled_trainloader.dataset.origin_prob
+    labeled_prob = [origin_prob[i] for i in labeled_idx]
+    unlabeled_prob = [origin_prob[i] for i in unlabeled_idx]
+    sample_ratio = torch.sum(prob<threshold).item()/args.num_batches*args.batch_size
+
+    # draw JSD dis
+    plt.clf()
+    kwargs = dict(histtype='stepfilled', alpha=0.75, density=False, bins=20)
+    plt.hist(origin_prob, color='blue', range=(0., 1.), label='prob', **kwargs)
+
+    plt.axvline(x=threshold,          color='black')
+    plt.axvline(x=origin_prob.mean(), color='gray')
+    plt.xlabel('JSD Values')
+    plt.ylabel('count')
+    plt.title(f'JSD Distribution of N Samples epoch :{epoch}')
+    plt.xlim(0, 1)
+    plt.grid(True)
+    plt.savefig(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
+
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["JSD"] = wandb.Image(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
+        logMsg["JSD/threshold"] = threshold
+        logMsg["JSD/sample_ratio"] = sample_ratio
+        logMsg["JSD/labeled_mean"] =  np.mean(labeled_prob)
+        logMsg["JSD/labeled_var"] = np.var(labeled_prob)
+        logMsg["JSD/unlabeled_mean"] = np.mean(unlabeled_prob)
+        logMsg["JSD/unlabeled_var"] = np.var(unlabeled_prob)
+
+        logMsg["JSD_clean/labeled_mean"] =  np.mean(labeled_prob)
+        logMsg["JSD_clean/labeled_var"] = np.var(labeled_prob)
+        logMsg["JSD_clean/unlabeled_mean"] = np.mean(unlabeled_prob)
+        logMsg["JSD_clean/unlabeled_var"] = np.var(unlabeled_prob)
+
+        wandb.log(logMsg)
+
 ## Semi-Supervised Loss
 class SemiLoss(object):
     def __call__(self, outputs_x, targets_x, outputs_u, targets_u, epoch, warm_up):
@@ -455,6 +496,7 @@ folder = 'Clothing1M_flow' + '_' + str(args.name)
 model_save_loc = './checkpoint/' + folder
 if not os.path.exists(model_save_loc):
     os.mkdir(model_save_loc)
+    os.mkdir(model_save_loc + '/JSD_distribution')
 
 ## wandb
 if (wandb != None):
@@ -502,6 +544,9 @@ for epoch in range(0, args.num_epochs+1):
         prob, paths = Calculate_JSD(epoch, net, flowNet)                          ## Calculate the JSD distances 
         threshold   = torch.mean(prob)                                           ## Simply Take the average as the threshold
         SR = torch.sum(prob<threshold).item()/prob.size()[0]                    ## Calculate the Ratio of clean samples      
+        
+        labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob=prob,  paths=paths)         ## Uniform Selection
+        logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
         
         for i in range(nb_repeat):
             print('\n\nTrain Net')

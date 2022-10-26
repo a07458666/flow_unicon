@@ -195,6 +195,46 @@ def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
         logMsg["JSD_selection/noise_f1"] = noise_f1
         wandb.log(logMsg)
 
+def logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
+    labeled_idx = labeled_trainloader.dataset.pred_idx
+    unlabeled_idx = unlabeled_trainloader.dataset.pred_idx
+    origin_prob =  labeled_trainloader.dataset.origin_prob
+    labeled_prob = [origin_prob[i] for i in labeled_idx]
+    unlabeled_prob = [origin_prob[i] for i in unlabeled_idx]
+    sample_ratio = torch.sum(prob<threshold).item()/args.num_samples
+
+    # draw JSD dis
+    plt.clf()
+    kwargs = dict(histtype='stepfilled', alpha=0.75, density=False, bins=20)
+    plt.hist(origin_prob, color='blue', range=(0., 1.), label='prob', **kwargs)
+
+    plt.axvline(x=threshold,          color='black')
+    plt.axvline(x=origin_prob.mean(), color='gray')
+    plt.xlabel('JSD Values')
+    plt.ylabel('count')
+    plt.title(f'JSD Distribution of N Samples epoch :{epoch}')
+    plt.xlim(0, 1)
+    plt.grid(True)
+    plt.savefig(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
+
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["JSD"] = wandb.Image(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
+        logMsg["JSD/threshold"] = threshold
+        logMsg["JSD/sample_ratio"] = sample_ratio
+        logMsg["JSD/labeled_mean"] =  np.mean(labeled_prob)
+        logMsg["JSD/labeled_var"] = np.var(labeled_prob)
+        logMsg["JSD/unlabeled_mean"] = np.mean(unlabeled_prob)
+        logMsg["JSD/unlabeled_var"] = np.var(unlabeled_prob)
+
+        logMsg["JSD_clean/labeled_mean"] =  np.mean(labeled_prob)
+        logMsg["JSD_clean/labeled_var"] = np.var(labeled_prob)
+        logMsg["JSD_clean/unlabeled_mean"] = np.mean(unlabeled_prob)
+        logMsg["JSD_clean/unlabeled_var"] = np.var(unlabeled_prob)
+
+        wandb.log(logMsg)
+
 class NegEntropy(object):
     def __call__(self,outputs):
         probs = torch.softmax(outputs, dim=1)
@@ -390,7 +430,9 @@ for epoch in range(start_epoch,args.num_epochs+1):
         jsd_threshold = threshold
         print('Train Net\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
-        if not args.isRealTask:
+        if args.isRealTask:
+            logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
+        else:
             logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
         flowTrainer.train(epoch, net, flowNet, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
 

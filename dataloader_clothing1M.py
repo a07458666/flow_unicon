@@ -91,16 +91,19 @@ class clothing_dataset(Dataset):
             pred_idx = [int(x) for x in list(pred_idx)]
             np.savez(save_file, index = pred_idx)
             self.train_imgs  = [train_imgs[i] for i in pred_idx]
+            self.origin_prob = torch.clone(probability)
             probability[probability<0.5] = 0                        ## Weight Adjustment 
             self.probability = [1-probability[i] for i in pred_idx]
+            self.pred_idx = pred_idx
             print("%s data has a size of %d"%(self.mode,len(self.train_imgs)))
 
-        elif self.mode == "unlabeled":  
+        elif self.mode == "unlabeled":
             train_imgs = paths 
             pred_idx1 = np.load(save_file)['index']
             idx = list(range(num_samples))
             pred_idx = [x for x in idx if x not in pred_idx1] 
-            self.train_imgs = [train_imgs[i] for i in pred_idx]                         
+            self.train_imgs = [train_imgs[i] for i in pred_idx]
+            self.pred_idx = pred_idx
             print("%s data has a size of %d"%(self.mode,len(self.train_imgs)))
 
         elif mode == "test":
