@@ -76,7 +76,7 @@ class webvision_dataset(Dataset):
                     print("sorted_indices :", sorted_indices)
                     clean_count = int(sample_ratio*num_samples)
                     print("clean_count :", clean_count)
-                    pred_idx = sorted_indices[:clean_count].cpu().numpy()
+                    pred_idx = sorted_indices[:clean_count]
                     print("pred_idx :", pred_idx)
                     # refine probability
                     self.origin_prob = torch.clone(probability)
