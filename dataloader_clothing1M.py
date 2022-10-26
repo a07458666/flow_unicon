@@ -91,7 +91,7 @@ class clothing_dataset(Dataset):
             pred_idx = [int(x) for x in list(pred_idx)]
             np.savez(save_file, index = pred_idx)
             self.train_imgs  = [train_imgs[i] for i in pred_idx]
-            self.origin_prob = torch.clone(probability)
+            self.origin_prob = torch.clone(probability).cpu().numpy()
             probability[probability<0.5] = 0                        ## Weight Adjustment 
             self.probability = [1-probability[i] for i in pred_idx]
             self.pred_idx = pred_idx

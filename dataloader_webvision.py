@@ -81,7 +81,7 @@ class webvision_dataset(Dataset):
                     print("pred_idx :", pred_idx)
                     np.savez(save_file, index = pred_idx)
                     # refine probability
-                    self.origin_prob = torch.clone(probability)
+                    self.origin_prob = torch.clone(probability).cpu().numpy()
                     probability[probability<0.5] = 0
                     self.probability = [1-probability[i] for i in pred_idx]
                     self.train_imgs  = [train_imgs[i] for i in pred_idx]
