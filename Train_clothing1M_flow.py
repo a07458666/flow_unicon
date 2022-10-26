@@ -53,6 +53,7 @@ parser.add_argument('--name', default="", type=str)
 parser.add_argument('--flow_modules', default="256-256-256-256", type=str)
 parser.add_argument('--ema_decay', default=0.9, type=float, help='ema decay')
 parser.add_argument('--cond_size', default=512, type=int)
+parser.add_argument('--lambda_f', default=0.1, type=float, help='flow nll loss weight')
 args = parser.parse_args()
 
 # torch.cuda.set_device(args.gpuid)
@@ -140,7 +141,7 @@ def train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, u
         approx2 = standard_normal_logprob(approx21).view(mixed_target.size()[0], -1).sum(1, keepdim=True)
         delta_log_p2 = delta_log_p2.view(flow_mixed_target.size()[0], flow_mixed_target.shape[1], 1).sum(1)
         log_p2 = (approx2 - delta_log_p2)
-        loss_flow = (-log_p2).mean()
+        loss_flow = (-log_p2).mean() * args.lambda_f
 
         ## Regularization
         prior = torch.ones(args.num_class) / args.num_class
