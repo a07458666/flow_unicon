@@ -6,7 +6,7 @@ from PIL import Image
 import json
 import torch
 from autoaugment import CIFAR10Policy, ImageNetPolicy
-
+import os
 
 class clothing_dataset(Dataset):
     def __init__(
