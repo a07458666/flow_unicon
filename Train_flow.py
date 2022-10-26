@@ -97,7 +97,7 @@ def Selection_Rate(prob, pre_threshold):
     threshold = torch.mean(prob)
     if args.ema_jsd:
         threshold = (args.jsd_decay * pre_threshold) + ((1 - args.jsd_decay) * threshold)
-    if threshold.item()>args.d_u:
+    if threshold.item() > args.d_u:
             threshold = threshold - (threshold-torch.min(prob))/args.tau
     SR = torch.sum(prob<threshold).item()/args.num_samples
     print("threshold : ", torch.mean(prob))
@@ -390,7 +390,8 @@ for epoch in range(start_epoch,args.num_epochs+1):
         jsd_threshold = threshold
         print('Train Net\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
-        logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
+        if not args.isRealTask:
+            logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
         flowTrainer.train(epoch, net, flowNet, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
 
     

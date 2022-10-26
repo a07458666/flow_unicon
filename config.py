@@ -63,6 +63,7 @@ def argumentParse():
     parser.add_argument('--w_ce', action='store_false', help = 'train with cross entrioy')
     parser.add_argument('--cond_size', default=128, type=int)
     parser.add_argument('--isRealTask', default=False, type=bool, help='') 
+    parser.add_argument('--lambda_f', default=1.0, type=float, help='flow nll loss weight')
     # load yaml
     _add_args_from_yaml(parser)
 

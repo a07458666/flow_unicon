@@ -43,6 +43,7 @@ class clothing_dataset(Dataset):
                 self.test_labels[img_path] = int(entry[1])
         
         save_file = 'pred_idx_clothing1M_aug.npz'
+        save_file = os.path.join(self.root, save_file)
         if mode == 'all':
             train_imgs = []
             with open("%s/noisy_train_key_list.txt" % self.root, "r") as f:

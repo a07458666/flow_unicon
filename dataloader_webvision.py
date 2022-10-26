@@ -58,7 +58,8 @@ class webvision_dataset(Dataset):
                 if target<num_class:
                     train_imgs.append(img)
                     self.train_labels[img]=target
-            save_file = 'Clean_index_webvision.npz'     
+            save_file = 'Clean_index_webvision.npz'
+            save_file = os.path.join(self.root, save_file)   
             if self.mode == 'all':
                 self.train_imgs = train_imgs
             else:                   
@@ -78,6 +79,7 @@ class webvision_dataset(Dataset):
                     print("clean_count :", clean_count)
                     pred_idx = sorted_indices[:clean_count]
                     print("pred_idx :", pred_idx)
+                    np.savez(save_file, index = pred_idx)
                     # refine probability
                     self.origin_prob = torch.clone(probability)
                     probability[probability<0.5] = 0

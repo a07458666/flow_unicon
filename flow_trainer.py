@@ -87,11 +87,11 @@ class FlowTrainer:
                 loss_ce = self.CEloss(outputs, labels)
                 if self.args.noise_mode=='asym':     # Penalize confident prediction for asymmetric noise
                     penalty = self.conf_penalty(outputs)
-                    L = loss_ce + penalty + loss_nll
+                    L = loss_ce + penalty + (self.args.lambda_f * loss_nll)
                 else:   
-                    L = loss_ce + loss_nll
+                    L = loss_ce + (self.args.lambda_f * loss_nll)
             else:
-                L = loss_nll
+                L = (self.args.lambda_f * loss_nll)
 
             optimizer.zero_grad()
             optimizerFlow.zero_grad()
@@ -253,9 +253,9 @@ class FlowTrainer:
 
             ## Total Loss
             if self.args.w_ce:
-                loss = loss_unicon + self.args.lambda_c * loss_simCLR + loss_flow + reg_f_var_loss
+                loss = loss_unicon + self.args.lambda_c * loss_simCLR + (self.args.lambda_f * loss_flow) + reg_f_var_loss
             else:
-                loss = self.args.lambda_c * loss_simCLR + loss_flow + reg_f_var_loss
+                loss = self.args.lambda_c * loss_simCLR + (self.args.lambda_f * loss_flow) + reg_f_var_loss
 
             # Compute gradient and Do SGD step
             optimizer.zero_grad()
