@@ -20,11 +20,11 @@ except ImportError:
     logger.info("Install Weights & Biases for experiment logging via 'pip install wandb' (recommended)")
 
 class SemiLoss(object):
-    def __call__(self, outputs_x, targets_x, outputs_u, targets_u, epoch, warm_up):
+    def __call__(self, outputs_x, targets_x, outputs_u, targets_u, epoch, warm_up, lambda_u):
         probs_u = torch.softmax(outputs_u, dim=1)
         Lx = -torch.mean(torch.sum(F.log_softmax(outputs_x, dim=1) * targets_x, dim=1))
         Lu = torch.mean((probs_u - targets_u)**2)
-        return Lx, Lu, linear_rampup(epoch,warm_up)
+        return Lx, Lu, linear_rampup(epoch,warm_up, lambda_u)
 
 class NegEntropy(object):
     def __call__(self,outputs):
@@ -34,7 +34,7 @@ class NegEntropy(object):
 class FlowTrainer:
     def __init__(self, args) -> None:
         self.args = args
-        self.cond_size = 128
+        self.cond_size = args.cond_size
         self.mean = 0
         self.std = 0.2
         self.sample_n = 1
@@ -42,13 +42,12 @@ class FlowTrainer:
         self.contrastive_criterion = SupConLoss()
         
         ## CE Loss Functions
-        if self.args.w_ce:
-            self.CE       = nn.CrossEntropyLoss(reduction='none')
-            self.CEloss   = nn.CrossEntropyLoss()
-            self.MSE_loss = nn.MSELoss(reduction= 'none')
-            self.criterion  = SemiLoss()
-        if self.args.noise_mode=='asym':
-            self.conf_penalty = NegEntropy()
+        self.CE       = nn.CrossEntropyLoss(reduction='none')
+        self.CEloss   = nn.CrossEntropyLoss()
+        self.MSE_loss = nn.MSELoss(reduction= 'none')
+        self.criterion  = SemiLoss()
+
+        self.conf_penalty = NegEntropy()
         return
 
     ## For Standard Training 
@@ -66,19 +65,17 @@ class FlowTrainer:
 
             if self.args.warmup_mixup:
                 mixed_input, mixed_target = mix_match(inputs, labels_one_hot, self.args.alpha_warmup)
-                feature, outputs = net(mixed_input)
+                _, outputs, feature_flow = net(mixed_input, get_feature = True)
                 flow_labels = mixed_target.unsqueeze(1).cuda()
             else:  
-                feature, outputs = net(inputs)
+                _, outputs, feature_flow = net(inputs, get_feature = True)
                 flow_labels = labels_one_hot.unsqueeze(1).cuda()
 
-            logFeature(feature)            
+            logFeature(feature_flow)            
 
             # == flow ==
-            feature = F.normalize(feature, dim=1)
-
             delta_p = torch.zeros(flow_labels.shape[0], flow_labels.shape[1], 1).cuda()
-            approx21, delta_log_p2 = flownet(flow_labels, feature, delta_p)
+            approx21, delta_log_p2 = flownet(flow_labels, feature_flow, delta_p)
             
             approx2 = standard_normal_logprob(approx21).view(flow_labels.size()[0], -1).sum(1, keepdim=True)
             delta_log_p2 = delta_log_p2.view(flow_labels.size()[0], flow_labels.shape[1], 1).sum(1)
@@ -90,11 +87,11 @@ class FlowTrainer:
                 loss_ce = self.CEloss(outputs, labels)
                 if self.args.noise_mode=='asym':     # Penalize confident prediction for asymmetric noise
                     penalty = self.conf_penalty(outputs)
-                    L = loss_ce + penalty + loss_nll
+                    L = loss_ce + penalty + (self.args.lambda_f * loss_nll)
                 else:   
-                    L = loss_ce + loss_nll
+                    L = loss_ce + (self.args.lambda_f * loss_nll)
             else:
-                L = loss_nll
+                L = (self.args.lambda_f * loss_nll)
 
             optimizer.zero_grad()
             optimizerFlow.zero_grad()
@@ -107,10 +104,9 @@ class FlowTrainer:
             else:
                 optimizer.step()
                 optimizerFlow.step()  
-
-            if self.args.ema:
-                self.net_ema.update()
-                self.flowNet_ema.update()
+            
+            self.net_ema.update()
+            self.flowNet_ema.update()
 
             ## wandb
             if (wandb != None):
@@ -123,16 +119,20 @@ class FlowTrainer:
                 wandb.log(logMsg)
 
             sys.stdout.write('\r')
-            sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t NLL-loss: %.4f'
-                    %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
+            if self.args.isRealTask:
+                sys.stdout.write('%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t NLL-loss: %.4f'
+                        %(self.args.dataset, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
+            else:
+                sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t NLL-loss: %.4f'
+                        %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
             sys.stdout.flush()
 
     def train(self, epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader):
         net.train()
         flownet.train()
 
-        unlabeled_train_iter = iter(unlabeled_trainloader)    
-        num_iter = (len(labeled_trainloader.dataset)//self.args.batch_size)+1
+        unlabeled_train_iter = iter(unlabeled_trainloader)
+        num_iter = (len(labeled_trainloader.dataset)//labeled_trainloader.batch_size)+1 
 
         for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x, labels_x_o) in enumerate(labeled_trainloader):      
             try:
@@ -149,74 +149,62 @@ class FlowTrainer:
 
             inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x = inputs_x.cuda(), inputs_x2.cuda(), inputs_x3.cuda(), inputs_x4.cuda(), labels_x.cuda(), w_x.cuda()
             inputs_u, inputs_u2, inputs_u3, inputs_u4 = inputs_u.cuda(), inputs_u2.cuda(), inputs_u3.cuda(), inputs_u4.cuda()
-            
-            labels_x_o = labels_x_o.cuda()
-            labels_u_o = labels_u_o.cuda()
 
             with torch.no_grad():
                 # Label co-guessing of unlabeled samples
-                if self.args.ema:
-                    with self.net_ema.average_parameters():
-                        features_u11, outputs_u11 = net(inputs_u)
-                        features_u12, outputs_u12 = net(inputs_u2)    
-                else:
-                    features_u11, outputs_u11 = net(inputs_u)
-                    features_u12, outputs_u12 = net(inputs_u2)
-
-                ## Pseudo-label
-                pu_flow = self.get_pseudo_label(flownet, features_u11, features_u12, std = self.args.pseudo_std)
-
-                pu_net = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1)) / 2
-                self.log_pu(pu_flow, pu_net, labels_u_o, epoch)
-
-                if self.args.w_ce:
-                    pu = (pu_flow + pu_net) / 2
-                else:
-                    pu = pu_flow
-                
                 lamb_Tu = (1 - linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.lambda_p, self.args.Tu))
-
-                ptu = pu**(1/lamb_Tu)            ## Temparature Sharpening
+                with self.net_ema.average_parameters():
+                    with self.flowNet_ema.average_parameters():
+                        pu_net_ema, pu_flow_ema = self.get_pseudo_label(net, flownet, inputs_u, inputs_u2, std = self.args.pseudo_std)
+                        pu_net_ema_sp = self.sharpening(pu_net_ema, self.args.Tu)
+                        pu_flow_ema_sp = self.sharpening(pu_flow_ema, lamb_Tu)
+        
+                pu_net, pu_flow = self.get_pseudo_label(net, flownet, inputs_u, inputs_u2, std = self.args.pseudo_std)
+                pu_net_sp = self.sharpening(pu_net, self.args.Tu)
+                pu_flow_sp = self.sharpening(pu_flow, lamb_Tu)
                 
-                targets_u = ptu / ptu.sum(dim=1, keepdim=True)
-                targets_u = targets_u.detach()                  
+                ## Pseudo-label
+                if self.args.w_ce:
+                    targets_u = (pu_flow_sp + pu_flow_ema_sp +  pu_net_sp + pu_net_ema_sp) / 4
+                else:
+                    targets_u = (pu_flow_sp + pu_flow_ema_sp) / 2
+                targets_u = targets_u.detach()        
 
                 ## Label refinement
-                if self.args.ema:
-                    with self.net_ema.average_parameters():
-                        features_x, outputs_x1  = net(inputs_x)
-                        features_x2, outputs_x2 = net(inputs_x2)            
-                else:
-                    features_x, outputs_x1 = net(inputs_x)
-                    features_x2, outputs_x2 = net(inputs_x2)
+                with self.net_ema.average_parameters():
+                    with self.flowNet_ema.average_parameters():
+                        px_net_ema, px_flow_ema = self.get_pseudo_label(net, flownet, inputs_x, inputs_x2, std = self.args.pseudo_std)
 
-                px_flow = self.get_pseudo_label(flownet, features_x, features_x2)
-                px_net = (torch.softmax(outputs_x1, dim=1) + torch.softmax(outputs_x2, dim=1)) / 2
+                px_net, px_flow = self.get_pseudo_label(net, flownet, inputs_x, inputs_x2, std = self.args.pseudo_std)
+
                 if self.args.w_ce:
-                    px = (px_flow + px_net) / 2
+                    px = (px_flow + px_flow_ema + px_net + px_net_ema) / 4
                 else:
-                    px = px_flow
-                    
+                    px = (px_flow + px_flow_ema) / 2
+
                 px_mix = w_x*labels_x + (1-w_x)*px
 
-                ptx = px_mix**(1/self.args.Tx)    ## Temparature sharpening 
-                            
-                targets_x = ptx / ptx.sum(dim=1, keepdim=True)           
+                targets_x = self.sharpening(px_mix, self.args.Tx)        
                 targets_x = targets_x.detach()
 
-                self.print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, epoch)
+                if not self.args.isRealTask:
+                    labels_x_o = labels_x_o.cuda()
+                    labels_u_o = labels_u_o.cuda()
 
-                logFeature(torch.cat([features_u11, features_u12, features_x, features_x2], dim=0))
-                # Calculate label sources
-                u_sources_pseudo = js_distance(targets_u, labels_u_o, self.args.num_class)
-                x_sources_origin = js_distance(labels_x, labels_x_o, self.args.num_class)
-                x_sources_refine = js_distance(targets_x, labels_x_o, self.args.num_class)
+                    self.log_pu((pu_flow_sp + pu_flow_ema_sp) / 2, (pu_net_sp + pu_net_ema_sp) / 2, labels_u_o, epoch)
+                    
+                    self.print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, epoch)
+
+                    # logFeature(torch.cat([features_u11_flow, features_u12_flow, features_x_flow, features_x2_flow], dim=0))
+
+                    # Calculate label sources
+                    u_sources_pseudo = js_distance(targets_u, labels_u_o, self.args.num_class)
+                    x_sources_origin = js_distance(labels_x, labels_x_o, self.args.num_class)
+                    x_sources_refine = js_distance(targets_x, labels_x_o, self.args.num_class)
 
             ## Unsupervised Contrastive Loss
             f1, _ = net(inputs_u3)
             f2, _ = net(inputs_u4)
-            f1 = F.normalize(f1, dim=1)
-            f2 = F.normalize(f2, dim=1)
             features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
 
             loss_simCLR = self.contrastive_criterion(features)
@@ -226,7 +214,7 @@ class FlowTrainer:
 
             mixed_input, mixed_target = mix_match(all_inputs, all_targets, self.args.alpha)
                     
-            flow_feature, logits = net(mixed_input) # add flow_feature
+            _, logits, flow_feature = net(mixed_input, get_feature = True) # add flow_feature
 
             # Regularization feature var
             reg_f_var_loss = torch.clamp(1-torch.sqrt(flow_feature.var(dim=0) + 1e-10), min=0).mean()
@@ -236,7 +224,7 @@ class FlowTrainer:
             
             if self.args.w_ce:
                 ## Combined Loss
-                Lx, Lu, lamb = self.criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, self.warm_up)
+                Lx, Lu, lamb = self.criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, self.warm_up, self.args.lambda_u)
                 
                 ## Regularization
                 prior = torch.ones(self.args.num_class)/self.args.num_class
@@ -246,7 +234,6 @@ class FlowTrainer:
                 loss_unicon = Lx + lamb * Lu + penalty
 
             ## Flow loss
-            flow_feature = F.normalize(flow_feature, dim=1)
             flow_mixed_target = mixed_target.unsqueeze(1).cuda()
             delta_p = torch.zeros(flow_mixed_target.shape[0], flow_mixed_target.shape[1], 1).cuda() 
             approx21, delta_log_p2 = flownet(flow_mixed_target, flow_feature, delta_p)
@@ -255,17 +242,20 @@ class FlowTrainer:
             delta_log_p2 = delta_log_p2.view(flow_mixed_target.size()[0], flow_mixed_target.shape[1], 1).sum(1)
             log_p2 = (approx2 - delta_log_p2)
 
-            lamb_u = linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.linear_u, self.args.lambda_u) + self.args.lamb_u_base
+            lamb_u = linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.linear_u, self.args.lambda_flow_u) + self.args.lamb_u_base
             
             loss_nll_x = -log_p2[:batch_size*2].mean()
             loss_nll_u = -log_p2[batch_size*2:].mean()
-            loss_flow = loss_nll_x + lamb_u * loss_nll_u
+            if self.args.split:
+                loss_flow = loss_nll_x + (lamb_u * loss_nll_u)
+            else:
+                loss_flow = (-log_p2).mean()
 
             ## Total Loss
             if self.args.w_ce:
-                loss = loss_unicon + self.args.lambda_c * loss_simCLR + loss_flow + reg_f_var_loss
+                loss = loss_unicon + self.args.lambda_c * loss_simCLR + (self.args.lambda_f * loss_flow) + reg_f_var_loss
             else:
-                loss = self.args.lambda_c * loss_simCLR + loss_flow + reg_f_var_loss
+                loss = self.args.lambda_c * loss_simCLR + (self.args.lambda_f * loss_flow) + reg_f_var_loss
 
             # Compute gradient and Do SGD step
             optimizer.zero_grad()
@@ -280,15 +270,14 @@ class FlowTrainer:
                 optimizer.step()
                 optimizerFlow.step()  
 
-            if self.args.ema:
-                self.net_ema.update()
-                self.flowNet_ema.update()
+            self.net_ema.update()
+            self.flowNet_ema.update()
 
             ## wandb
             if (wandb != None):
                 logMsg = {}
                 logMsg["epoch"] = epoch
-                logMsg["lamb_Tu"] = lamb_Tu
+                # logMsg["lamb_Tu"] = lamb_Tu
                 
                 logMsg["loss/nll_x"] = loss_nll_x.item()
                 logMsg["loss/nll_u"] = loss_nll_u.item()
@@ -301,6 +290,7 @@ class FlowTrainer:
                 logMsg["loss/nll_u_var"] = loss_nll_u.var()
 
                 logMsg["loss/simCLR"] = loss_simCLR.item()
+                logMsg["loss/reg_f_var_loss"] = reg_f_var_loss.item()
 
                 logMsg["label_quality/unlabel_pseudo_JSD_mean"] = u_sources_pseudo.mean().item()
                 logMsg["label_quality/label_origin_JSD_mean"] = x_sources_origin.mean().item()
@@ -309,6 +299,7 @@ class FlowTrainer:
                 if self.args.w_ce:
                     logMsg["loss/ce_x"] = Lx.item()
                     logMsg["loss/mse_u"] = Lu.item()
+                    logMsg["loss/penalty"] = penalty.item()
 
                 wandb.log(logMsg)
 
@@ -327,14 +318,16 @@ class FlowTrainer:
 
             ## Get outputs of both network
             with torch.no_grad():
-                if self.args.ema:
-                    with self.net_ema.average_parameters():
-                        feature = net(inputs)[0]
-                else:
-                    feature = net(inputs)[0]
-                feature = F.normalize(feature, dim=1)
-                out = self.predict(flowNet, feature)
+                _, _, feature = net(inputs, get_feature=True)
+                out1 = self.predict(flowNet, feature)
 
+                with self.net_ema.average_parameters():
+                    with self.flowNet_ema .average_parameters():
+                        _, _, feature2 = net(inputs, get_feature=True)
+                        out2 = self.predict(flowNet, feature2)
+
+            ## Get the Prediction
+            out = (out1 + out2) / 2
             ## Divergence clculator to record the diff. between ground truth and output prob. dist.  
             dist = js_distance(out, targets, self.args.num_class)
             JSD[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = dist
@@ -345,55 +338,85 @@ class FlowTrainer:
         model = model.cuda()
         return model
 
-    def predict(self, net, feature, mean = 0, std = 0, sample_n = 1, origin=False):
+    def predict(self, flowNet, feature, mean = 0, std = 0.2, sample_n = 50):
         with torch.no_grad():
             batch_size = feature.size()[0]
-            feature = F.normalize(feature, dim=1)
             feature = feature.repeat(sample_n, 1, 1)
             input_z = torch.normal(mean = mean, std = std, size=(sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
             delta_p = torch.zeros(input_z.shape[0], input_z.shape[1], 1).cuda()
-            if self.args.ema:
-                with self.flowNet_ema.average_parameters():
-                    approx21, _ = net(input_z, feature, delta_p, reverse=True)
-            else:
-                approx21, _ = net(input_z, feature, delta_p, reverse=True)
-            probs = torch.clamp(approx21, min=0, max=1)
+
+            approx21, _ = flowNet(input_z, feature, delta_p, reverse=True)
+
+            probs = torch.tanh(approx21)
+            probs = torch.clamp(probs, min=0, max=1)
             probs = probs.view(sample_n, -1, self.args.num_class)
             probs_mean = torch.mean(probs, dim=0, keepdim=False)
             probs_mean = F.normalize(probs_mean, dim=1, p=1)
-            if origin:
-                return approx21.detach().squeeze(1)
             return probs_mean
 
-    def testByFlow(self, net, flownet, test_loader):
+    def testByFlow(self, epoch, net, flownet, test_loader):
+        print("\n====Test====\n")
         net.eval()
         flownet.eval()
-        correct = 0
         total = 0
-        prob_sum = 0
+        # flow acc
+        correct_flow = 0
+        prob_sum_flow = 0
+
+        # cross entropy acc
+        correct_ce = 0
+        prob_sum_ce = 0
+
+        # mix acc
+        correct_mix = 0
+        prob_sum_mix = 0
+
         with torch.no_grad():
             for batch_idx, (inputs, targets) in tqdm(enumerate(test_loader)):
                 inputs, targets = inputs.cuda(), targets.cuda()
-                if self.args.ema:
-                    with self.net_ema.average_parameters():
-                        feature, _ = net(inputs)
-                else:
-                       feature, _ = net(inputs)
-                outputs = self.predict(flownet, feature, origin=True)
-                # if (batch_idx == 1):
-                #     print("outputs", outputs[:10])
-                #     print("targets", targets[:10])
-                prob, predicted = torch.max(outputs, 1)
+
+                _, logits, feature = net(inputs, get_feature = True)
+                outputs = self.predict(flownet, feature)
+
+                with self.net_ema.average_parameters():
+                    with self.flowNet_ema.average_parameters():
+                        _, logits_ema, feature_ema = net(inputs, get_feature = True)
+                        outputs_ema = self.predict(flownet, feature_ema)
+                
+                logits = (logits + logits_ema) / 2  
+                outputs = (outputs + outputs_ema) / 2
+                prob_flow, predicted_flow = torch.max(outputs, 1)
 
                 total += targets.size(0)
-                correct += predicted.eq(targets).cpu().sum().item()  
-                prob_sum += prob.cpu().sum().item()
+                correct_flow += predicted_flow.eq(targets).cpu().sum().item()  
+                prob_sum_flow += prob_flow.cpu().sum().item()
 
-        acc = 100.*correct/total
-        ## confidence score
-        confidence = prob_sum/total
+                if self.args.w_ce:
+                    prob_ce, predicted_ce = torch.max(logits, 1)
+                    correct_ce += predicted_ce.eq(targets).cpu().sum().item()  
+                    prob_sum_ce += prob_ce.cpu().sum().item()
 
-        return acc, confidence
+                    logits_mix = (logits + outputs) / 2
+                    prob_mix, predicted_mix = torch.max(logits_mix, 1)
+                    correct_mix += predicted_mix.eq(targets).cpu().sum().item()
+                    prob_sum_mix += prob_mix.cpu().sum().item()
+                    
+
+        acc_flow = 100.*correct_flow/total
+        confidence_flow = prob_sum_flow/total
+
+        print("\n| Test Epoch #%d\t Accuracy: %.2f%%\n" %(epoch, acc_flow))  
+    
+        if self.args.w_ce:
+            acc_ce = 100.*correct_ce/total
+            confidence_ce = prob_sum_ce/total
+            
+            acc_mix = 100.*correct_mix/total
+            confidence_mix = prob_sum_mix/total
+
+            return acc_flow, confidence_flow, acc_ce, confidence_ce, acc_mix, confidence_mix
+        else:
+            return acc_flow, confidence_flow
 
     def torch_onehot(self, y, Nclass):
         if y.is_cuda:
@@ -406,16 +429,15 @@ class FlowTrainer:
         return y_onehot
 
     ## Pseudo-label
-    def get_pseudo_label(self, flownet, features_u11, features_u12, std = 0):
+    def get_pseudo_label(self, net, flownet, inputs_u, inputs_u2, std = 0):
+        _, outputs_u11, features_u11 = net(inputs_u, get_feature = True)
+        _, outputs_u12, features_u12 = net(inputs_u2, get_feature = True)
         flow_outputs_u11 = self.predict(flownet, features_u11, std)
         flow_outputs_u12 = self.predict(flownet, features_u12, std)
-
-        pu = (flow_outputs_u11 + flow_outputs_u12) / 2
         
-        return pu
-        # pu_label = torch.distributions.Categorical(pu).sample()
-        # pu_onehot = self.torch_onehot(pu_label, pu.shape[1]).detach()
-        # return pu_onehot
+        pu_net = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1)) / 2
+        pu_flow = (flow_outputs_u11 + flow_outputs_u12) / 2
+        return pu_net, pu_flow
 
     def setEma(self, net, flowNet):
         self.net_ema = ExponentialMovingAverage(net.parameters(), decay=self.args.decay)
@@ -480,3 +502,7 @@ class FlowTrainer:
                 logMsg["pseudo/confidence_net"] = confidence_net
             wandb.log(logMsg)
         return
+    
+    def sharpening(self, labels, T):
+        labels = labels**(1/T)
+        return labels / labels.sum(dim=1, keepdim=True)

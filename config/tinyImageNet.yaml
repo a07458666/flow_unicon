@@ -9,6 +9,6 @@ batch_size: 32
 warm_up: 20
 num_samples: 100000
 lambda_p: 100
-Tu: 0.2
+Tu: 0.5
 alpha: 2
-ema: true
+flow_modules: 256-256-256-256

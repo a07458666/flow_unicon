@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import os
 import sys
+import torch.nn.functional as F
 
 
 class BasicConv2d(nn.Module):
@@ -207,7 +208,7 @@ class Block8(nn.Module):
 
 class InceptionResNetV2(nn.Module):
 
-    def __init__(self, num_classes=1001):
+    def __init__(self, num_classes=1001, feature_dim=512):
         super(InceptionResNetV2, self).__init__()
         # Special attributs
         self.input_space = None
@@ -275,6 +276,10 @@ class InceptionResNetV2(nn.Module):
         self.avgpool_1a = nn.AvgPool2d(8, count_include_pad=False)
         self.last_linear = nn.Linear(1536, num_classes)
 
+        self.feature_head = nn.Linear(1536, feature_dim)
+        self.projection_head = nn.Linear(1536, feature_dim)
+        self.bnl = nn.BatchNorm1d(feature_dim)
+
     def features(self, input):
         x = self.conv2d_1a(input)
         x = self.conv2d_2a(x)
@@ -298,10 +303,28 @@ class InceptionResNetV2(nn.Module):
         x = x.view(x.size(0), -1)
         x = self.last_linear(x)
         return x
-
-    def forward(self, input):
-        x = self.features(input)
-        x = self.logits(x)
+    
+    def projection(self, features):
+        x = self.avgpool_1a(features)
+        x = x.view(x.size(0), -1)
+        x = self.bnl(self.projection_head(x))
         return x
+    
+    def flowFeature(self, features):
+        x = self.avgpool_1a(features)
+        x = x.view(x.size(0), -1)
+        x = self.feature_head(x)
+        return x
+
+    def forward(self, input, get_feature = False):
+        x = self.features(input)
+        logits_out = self.logits(x)
+        ssl_out = self.projection(x)
+        feature_out = self.flowFeature(x)
+
+        if get_feature:
+            return F.normalize(ssl_out, dim=1), logits_out, F.normalize(feature_out, dim=1)
+        else:
+            return F.normalize(ssl_out, dim=1), logits_out
 
 

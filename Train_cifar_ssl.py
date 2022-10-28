@@ -85,7 +85,6 @@ train_loss = open(model_save_loc +'/train_loss.txt','w')
 
 ## wandb
 if (wandb != None):
-    os.environ["WANDB_WATCH"] = "false"
     wandb.init(project="FlowUNICON", entity="andy-su", name=folder)
     wandb.config.update(args)
     wandb.define_metric("loss", summary="min")

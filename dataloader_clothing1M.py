@@ -6,7 +6,7 @@ from PIL import Image
 import json
 import torch
 from autoaugment import CIFAR10Policy, ImageNetPolicy
-
+import os
 
 class clothing_dataset(Dataset):
     def __init__(
@@ -32,23 +32,24 @@ class clothing_dataset(Dataset):
             lines = f.read().splitlines()
             for l in lines:
                 entry = l.split()
-                img_path = "%s/" % self.root + entry[0][7:]
+                img_path = "%s/images/" % self.root + entry[0][7:]
                 self.train_labels[img_path] = int(entry[1])
 
         with open("%s/clean_label_kv.txt" % self.root, "r") as f:
             lines = f.read().splitlines()
             for l in lines:
                 entry = l.split()
-                img_path = "%s/" % self.root + entry[0][7:]
+                img_path = "%s/images/" % self.root + entry[0][7:]
                 self.test_labels[img_path] = int(entry[1])
         
         save_file = 'pred_idx_clothing1M_aug.npz'
+        save_file = os.path.join(self.root, save_file)
         if mode == 'all':
             train_imgs = []
             with open("%s/noisy_train_key_list.txt" % self.root, "r") as f:
                 lines = f.read().splitlines()
                 for l in lines:
-                    img_path = "%s/" % self.root + l[7:]
+                    img_path = "%s/images/" % self.root + l[7:]
                     train_imgs.append(img_path)
             random.shuffle(train_imgs)
             class_num = torch.zeros(num_class)
@@ -90,16 +91,19 @@ class clothing_dataset(Dataset):
             pred_idx = [int(x) for x in list(pred_idx)]
             np.savez(save_file, index = pred_idx)
             self.train_imgs  = [train_imgs[i] for i in pred_idx]
+            self.origin_prob = torch.clone(probability).cpu().numpy()
             probability[probability<0.5] = 0                        ## Weight Adjustment 
             self.probability = [1-probability[i] for i in pred_idx]
+            self.pred_idx = pred_idx
             print("%s data has a size of %d"%(self.mode,len(self.train_imgs)))
 
-        elif self.mode == "unlabeled":  
+        elif self.mode == "unlabeled":
             train_imgs = paths 
             pred_idx1 = np.load(save_file)['index']
             idx = list(range(num_samples))
             pred_idx = [x for x in idx if x not in pred_idx1] 
-            self.train_imgs = [train_imgs[i] for i in pred_idx]                         
+            self.train_imgs = [train_imgs[i] for i in pred_idx]
+            self.pred_idx = pred_idx
             print("%s data has a size of %d"%(self.mode,len(self.train_imgs)))
 
         elif mode == "test":
@@ -107,14 +111,14 @@ class clothing_dataset(Dataset):
             with open("%s/clean_test_key_list.txt" % self.root, "r") as f:
                 lines = f.read().splitlines()
                 for l in lines:
-                    img_path = "%s/" % self.root + l[7:]
+                    img_path = "%s/images/" % self.root + l[7:]
                     self.test_imgs.append(img_path)
         elif mode == "val":
             self.val_imgs = []
             with open("%s/clean_val_key_list.txt" % self.root, "r") as f:
                 lines = f.read().splitlines()
                 for l in lines:
-                    img_path = "%s/" % self.root + l[7:]
+                    img_path = "%s/images/" % self.root + l[7:]
                     self.val_imgs.append(img_path)
 
     def __getitem__(self, index):
@@ -200,7 +204,7 @@ class clothing_dataloader:
                 transforms.Resize(256),
                 transforms.RandomCrop(224),
                 transforms.RandomHorizontalFlip(),
-                ImageNetPolicy(),
+                CIFAR10Policy(),
                 transforms.ToTensor(),
                 transforms.Normalize((0.6959, 0.6537, 0.6371), (0.3113, 0.3192, 0.3214)),
             ]

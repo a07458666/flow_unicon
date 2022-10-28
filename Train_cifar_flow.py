@@ -78,7 +78,6 @@ loss_log = open(model_save_loc +'/loss_batch.txt','w')
 
 ## wandb
 if (wandb != None):
-    os.environ["WANDB_WATCH"] = "false"
     wandb.init(project="FlowUNICON", entity="andy-su", name=folder)
     wandb.config.update(args)
     wandb.define_metric("loss", summary="min")

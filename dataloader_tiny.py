@@ -42,7 +42,7 @@ transform_strong_100_compose = transforms.Compose(
         transforms.RandomCrop(64),
         transforms.ColorJitter(brightness=0.3, contrast=0.35, saturation=0.4, hue=0.07),
         transforms.RandomHorizontalFlip(),
-        ImageNetPolicy(),
+        CIFAR10Policy(),
         transforms.ToTensor(),
         transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ]
@@ -264,8 +264,10 @@ class tiny_imagenet_dataset(Dataset):
             self.origin_prob = torch.clone(probability)
             probability[probability<0.5] = 0
             self.probability = [1-probability[i] for i in pred_idx]
+            self.pred_idx = pred_idx
             print("%s data has a size of %d"%(self.mode, len(self.train_imgs)))
             self.train_labels = noise_label                 ## Check this if it is right
+            
 
         elif self.mode == "unlabeled":
             pred_idx       = np.load(save_file)['index']
@@ -273,6 +275,7 @@ class tiny_imagenet_dataset(Dataset):
             pred_idx_noisy = [x for x in idx if x not in pred_idx]                                                   
             pred_idx = pred_idx_noisy   
             self.train_imgs = np.array(self.train_images)[pred_idx]
+            self.pred_idx = pred_idx
             print("%s data has a size of %d"%(self.mode,len(self.train_imgs)))
 
         elif self.mode == 'val':

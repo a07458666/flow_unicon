@@ -38,7 +38,8 @@ args = argumentParse()
 print("args : ",vars(args))
 
 ## GPU Setup
-torch.cuda.set_device(args.gpuid)
+os.environ['CUDA_VISIBLE_DEVICES'] = args.gpuid
+# torch.cuda.set_device(args.gpuid)
 random.seed(args.seed)
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed_all(args.seed)
@@ -56,12 +57,16 @@ if args.dataset== 'cifar10' or args.dataset== 'cifar100':
 elif args.dataset=='TinyImageNet':
     from PreResNet_tiny import *
     from dataloader_tiny import tinyImagenet_dataloader as dataloader
-elif args.dataset=="Clothing1M":
-    from PreResNet_source import *
-    import dataloader_clothing1M as dataloader
+elif args.dataset=='WebVision':
+    from InceptionResNetV2 import *
+    from dataloader_webvision import webvision_dataloader as dataloader
 
 ## Checkpoint Location
-folder = args.dataset + '_' + args.noise_mode + '_' + str(args.ratio)  + '_flow_' + args.name
+if  args.isRealTask:
+    folder = args.dataset +  '_flow_' + args.name
+else:
+    folder = args.dataset + '_' + args.noise_mode + '_' + str(args.ratio)  + '_flow_' + args.name
+
 model_save_loc = './checkpoint/' + folder
 if not os.path.exists(model_save_loc):
     os.mkdir(model_save_loc)
@@ -80,43 +85,28 @@ loss_log = open(model_save_loc +'/loss_batch.txt','w')
 ## wandb
 if (wandb != None):
     wandb.init(project="FlowUNICON", entity="andy-su", name=folder)
+    wandb.run.log_code(".")
     wandb.config.update(args)
     wandb.define_metric("acc/test", summary="max")
     wandb.define_metric("loss/nll", summary="min")
     wandb.define_metric("loss/nll_max", summary="min")
     wandb.define_metric("loss/nll_min", summary="min")
     wandb.define_metric("loss/nll_var", summary="min")
-    
-    wandb.run.log_code(".")
-
-## Test Accuracy
-def test(epoch,net,flowNet, test_loader):
-    acc, confidence = flowTrainer.testByFlow(net, flowNet, test_loader)
-    print("\n| Test Epoch #%d\t Accuracy: %.2f%%\n" %(epoch,acc))  
-    
-    ## wandb
-    if (wandb != None):
-        logMsg = {}
-        logMsg["epoch"] = epoch
-        logMsg["acc/test"] = acc
-        wandb.log(logMsg)
-    
-    test_log.write(str(acc)+'\n')
-    test_log.flush()  
-    return acc, confidence
 
 def Selection_Rate(prob, pre_threshold):
     threshold = torch.mean(prob)
-    SR = torch.sum(prob<threshold).item()/args.num_samples
     if args.ema_jsd:
         threshold = (args.jsd_decay * pre_threshold) + ((1 - args.jsd_decay) * threshold)
+    if threshold.item() > args.d_u:
+            threshold = threshold - (threshold-torch.min(prob))/args.tau
+    SR = torch.sum(prob<threshold).item()/args.num_samples
     print("threshold : ", torch.mean(prob))
     print("threshold(new) : ", threshold)
     print("prob size : ", prob.size())
     print("down :", torch.sum(prob<threshold).item())
     print("up :", torch.sum(prob>threshold).item())
-    if SR <= 1/args.num_class or SR >= 1.0:
-        new_SR = np.clip(SR, 1/args.num_class, 0.9)
+    if SR <= 0.1  or SR >= 1.0:
+        new_SR = np.clip(SR, 0.1 , 0.9)
         print(f'WARNING: sample rate = {SR}, set to {new_SR}')
         SR = new_SR
     return SR, threshold
@@ -205,13 +195,57 @@ def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
         logMsg["JSD_selection/noise_f1"] = noise_f1
         wandb.log(logMsg)
 
+def logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
+    labeled_idx = labeled_trainloader.dataset.pred_idx
+    unlabeled_idx = unlabeled_trainloader.dataset.pred_idx
+    origin_prob =  labeled_trainloader.dataset.origin_prob
+    labeled_prob = [origin_prob[i] for i in labeled_idx]
+    unlabeled_prob = [origin_prob[i] for i in unlabeled_idx]
+    sample_ratio = torch.sum(prob<threshold).item()/args.num_samples
+
+    # draw JSD dis
+    plt.clf()
+    kwargs = dict(histtype='stepfilled', alpha=0.75, density=False, bins=20)
+    plt.hist(origin_prob, color='blue', range=(0., 1.), label='prob', **kwargs)
+
+    plt.axvline(x=threshold,          color='black')
+    plt.axvline(x=origin_prob.mean(), color='gray')
+    plt.xlabel('JSD Values')
+    plt.ylabel('count')
+    plt.title(f'JSD Distribution of N Samples epoch :{epoch}')
+    plt.xlim(0, 1)
+    plt.grid(True)
+    plt.savefig(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
+
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["JSD"] = wandb.Image(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
+        logMsg["JSD/threshold"] = threshold
+        logMsg["JSD/sample_ratio"] = sample_ratio
+        logMsg["JSD/labeled_mean"] =  np.mean(labeled_prob)
+        logMsg["JSD/labeled_var"] = np.var(labeled_prob)
+        logMsg["JSD/unlabeled_mean"] = np.mean(unlabeled_prob)
+        logMsg["JSD/unlabeled_var"] = np.var(unlabeled_prob)
+
+        logMsg["JSD_clean/labeled_mean"] =  np.mean(labeled_prob)
+        logMsg["JSD_clean/labeled_var"] = np.var(labeled_prob)
+        logMsg["JSD_clean/unlabeled_mean"] = np.mean(unlabeled_prob)
+        logMsg["JSD_clean/unlabeled_var"] = np.var(unlabeled_prob)
+
+        wandb.log(logMsg)
+
 class NegEntropy(object):
     def __call__(self,outputs):
         probs = torch.softmax(outputs, dim=1)
         return torch.mean(torch.sum(probs.log()*probs, dim=1))
 
 def create_model():
-    model = ResNet18(num_classes=args.num_class)
+    
+    if args.dataset=='WebVision':
+        model = InceptionResNetV2(num_classes=args.num_class, feature_dim=args.cond_size)
+    else:
+        model = ResNet18(num_classes=args.num_class, feature_dim=args.cond_size)
     model = model.cuda()
     return model
 
@@ -285,38 +319,38 @@ def save_model(net, flowNet, epoch, model_name, model_name_flow, acc = 0):
         'Batch Size': args.batch_size,
         'epoch': epoch,
     }
-    if args.ema:
-        checkpoint_ema = {
-            'net': flowTrainer.net_ema.state_dict(),
-            'Model_number': 3,
-            'Noise_Ratio': args.ratio,
-            'Loss Function': 'CrossEntropyLoss',
-            'Optimizer': 'SGD',
-            'Noise_mode': args.noise_mode,
-            'Accuracy': acc,
-            'Pytorch version': '1.4.0',
-            'Dataset': args.dataset,
-            'Batch Size': args.batch_size,
-            'epoch': epoch,
-        }
+    
+    checkpoint_ema = {
+        'net': flowTrainer.net_ema.state_dict(),
+        'Model_number': 3,
+        'Noise_Ratio': args.ratio,
+        'Loss Function': 'CrossEntropyLoss',
+        'Optimizer': 'SGD',
+        'Noise_mode': args.noise_mode,
+        'Accuracy': acc,
+        'Pytorch version': '1.4.0',
+        'Dataset': args.dataset,
+        'Batch Size': args.batch_size,
+        'epoch': epoch,
+    }
 
-        checkpoint_flow_ema = {
-            'net': flowTrainer.flowNet_ema.state_dict(),
-            'Model_number': 4,
-            'Noise_Ratio': args.ratio,
-            'Loss Function': 'log-likelihood',
-            'Optimizer': 'SGD',
-            'Noise_mode': args.noise_mode,
-            'Dataset': args.dataset,
-            'Batch Size': args.batch_size,
-            'epoch': epoch,
-        }
+    checkpoint_flow_ema = {
+        'net': flowTrainer.flowNet_ema.state_dict(),
+        'Model_number': 4,
+        'Noise_Ratio': args.ratio,
+        'Loss Function': 'log-likelihood',
+        'Optimizer': 'SGD',
+        'Noise_mode': args.noise_mode,
+        'Dataset': args.dataset,
+        'Batch Size': args.batch_size,
+        'epoch': epoch,
+    }
 
     torch.save(checkpoint, os.path.join(model_save_loc, model_name))
     torch.save(checkpoint_flow, os.path.join(model_save_loc, model_name_flow))
-    if args.ema:
-        torch.save(checkpoint_ema, os.path.join(model_save_loc, model_name_ema))
-        torch.save(checkpoint_flow_ema, os.path.join(model_save_loc, model_name_flow_ema))
+    
+    torch.save(checkpoint_ema, os.path.join(model_save_loc, model_name_ema))
+    torch.save(checkpoint_flow_ema, os.path.join(model_save_loc, model_name_flow_ema))
 
 ## Call the dataloader
 if args.dataset== 'cifar10' or args.dataset== 'cifar100':
@@ -324,7 +358,8 @@ if args.dataset== 'cifar10' or args.dataset== 'cifar100':
         root_dir=model_save_loc, noise_file='%s/clean_%.4f_%s.npz'%(args.data_path,args.ratio, args.noise_mode))
 elif args.dataset== 'TinyImageNet':
     loader = dataloader(root=args.data_path, batch_size=args.batch_size, num_workers=4, ratio = args.ratio, noise_mode = args.noise_mode, noise_file='%s/clean_%.2f_%s.npz'%(args.data_path,args.ratio, args.noise_mode))
-
+elif args.dataset == 'WebVision':
+    loader = dataloader(batch_size=args.batch_size,num_workers=5,root_dir=args.data_path, num_class=args.num_class)
 
 print('| Building net')
 net = create_model()
@@ -332,7 +367,10 @@ net = create_model()
 # flow model
 flowTrainer = FlowTrainer(args)
 flowNet = flowTrainer.create_model()
-flowTrainer.setEma(net, flowNet)
+
+# gpus
+# net = nn.DataParallel(net)
+# flowNet = nn.DataParallel(flowNet)
 
 cudnn.benchmark = True
 
@@ -354,9 +392,10 @@ if args.resume:
     start_epoch = args.warm_up
     net.load_state_dict(torch.load(os.path.join(model_save_loc, model_name))['net'])
     flowNet.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow))['net'])
-    if args.ema:
-        flowTrainer.net_ema.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_ema))['net'])
-        flowTrainer.flowNet_ema.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_ema))['net'])
+    
+    flowTrainer.net_ema.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_ema))['net'])
+    flowTrainer.flowNet_ema.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_ema))['net'])
+    
 elif args.pretrain != '':
     start_epoch = 0
     args.warm_up = 1
@@ -366,6 +405,7 @@ else:
 
 best_acc = 0
 jsd_threshold = args.thr
+flowTrainer.setEma(net, flowNet)
 
 ## Warmup and SSL-Training 
 for epoch in range(start_epoch,args.num_epochs+1):
@@ -373,7 +413,8 @@ for epoch in range(start_epoch,args.num_epochs+1):
     test_loader = loader.run(0, 'val')
     eval_loader = loader.run(0, 'eval_train')   
     warmup_trainloader = loader.run(0,'warmup')
-    
+        
+    print("Data Size : ", len(warmup_trainloader.dataset))
     ## Warmup Stage 
     if epoch<args.warm_up:       
         warmup_trainloader = loader.run(0, 'warmup')
@@ -389,11 +430,18 @@ for epoch in range(start_epoch,args.num_epochs+1):
         jsd_threshold = threshold
         print('Train Net\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
-        logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
+        if args.isRealTask:
+            logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
+        else:
+            logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
         flowTrainer.train(epoch, net, flowNet, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
 
-    acc, confidence = test(epoch, net, flowNet, test_loader)
-
+    
+    if args.w_ce:
+        acc, confidence, acc_ce, confidence_ce, acc_mix, confidence_mix = flowTrainer.testByFlow(epoch, net, flowNet, test_loader)
+    else:
+        acc, confidence = flowTrainer.testByFlow(epoch, net, flowNet, test_loader)
+    
     scheduler.step()
     schedulerFlow.step()
 
@@ -402,9 +450,14 @@ for epoch in range(start_epoch,args.num_epochs+1):
         logMsg = {}
         logMsg["epoch"] = epoch
         logMsg["runtime"] = time.time() - startTime
+        logMsg["acc/test"] = acc
         logMsg["confidence score"] = confidence
+        if args.w_ce:
+            logMsg["acc/test(ce_head)"] = acc_ce
+            logMsg["confidence score(test_ce_head)"] = confidence_ce
+            logMsg["acc/test(mix)"] = acc_mix
+            logMsg["confidence score(mix)"] = confidence_mix
         wandb.log(logMsg)
-
     if acc > best_acc:
 
         save_model(net, flowNet, epoch, model_name, model_name_flow, acc)

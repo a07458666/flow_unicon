@@ -17,16 +17,22 @@ from sklearn.mixture import GaussianMixture
 import copy 
 import torchnet
 from Contrastive_loss import *
-from PreResNet_source import *
+from PreResNet_clothing1M import *
+
+try:
+    import wandb
+except ImportError:
+    wandb = None
+    logger.info("Install Weights & Biases for experiment logging via 'pip install wandb' (recommended)")
 
 
 parser = argparse.ArgumentParser(description='PyTorch Clothing1M Training')
 parser.add_argument('--batch_size', default=32, type=int, help='train batchsize') 
-parser.add_argument('--lr', '--learning_rate', default=0.005, type=float, help='initial learning rate')   ## Set the learning rate to 0.005 for faster training at the beginning
+parser.add_argument('--lr', '--learning_rate', default=0.002, type=float, help='initial learning rate')   ## Set the learning rate to 0.005 for faster training at the beginning
 parser.add_argument('--alpha', default=0.5, type=float, help='parameter for Beta')
 parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
 parser.add_argument('--T', default=0.5, type=float, help='sharpening temperature')
-parser.add_argument('--num_epochs', default=200, type=int)
+parser.add_argument('--num_epochs', default=8, type=int)
 parser.add_argument('--id', default='clothing1m')
 parser.add_argument('--data_path', default='./data/Clothing1M_org', type=str, help='path to dataset')
 parser.add_argument('--seed', default=123)
@@ -36,6 +42,8 @@ parser.add_argument('--num_class', default=14, type=int)
 parser.add_argument('--num_batches', default=1000, type=int)
 parser.add_argument('--dataset', default="Clothing1M", type=str)
 parser.add_argument('--resume', default=False, type=bool, help = 'Resume from the warmup checkpoint')
+parser.add_argument('--name', default="", type=str)
+
 args = parser.parse_args()
 
 torch.cuda.set_device(args.gpuid)
@@ -113,8 +121,6 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
         ## Unsupervised Contrastive Loss
         f1, _ = net(inputs_u)
         f2, _ = net(inputs_u2)
-        f1    = F.normalize(f1, dim=1)
-        f2    = F.normalize(f2, dim=1)
         features    = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
         loss_simCLR = contrastive_criterion(features)
 
@@ -156,6 +162,14 @@ def train(epoch, net, net2, optimizer, labeled_trainloader, unlabeled_trainloade
                 %(args.dataset,  epoch, args.num_epochs, batch_idx+1, num_iter, loss_x/(batch_idx+1), loss_ucl/(batch_idx+1)))
         sys.stdout.flush()
 
+        ## wandb
+        if (wandb != None):
+            logMsg = {}
+            logMsg["epoch"] = epoch
+            logMsg["loss/Lx"] = Lx.item()
+            logMsg["loss/loss_simCLR"] = loss_simCLR.item()
+            logMsg["loss/penalty"] = penalty.item()
+
 
 def warmup(net,optimizer,dataloader):
     net.train()
@@ -174,6 +188,13 @@ def warmup(net,optimizer,dataloader):
         sys.stdout.write('|Warm-up: Iter[%3d/%3d]\t CE-loss: %.4f  Conf-Penalty: %.4f'
                 %(batch_idx+1, args.num_batches, loss.item(), penalty.item()))
         sys.stdout.flush()
+
+        ## wandb
+        if (wandb != None):
+            logMsg = {}
+            logMsg["epoch"] = epoch
+            logMsg["loss/CEloss"] = loss.item()
+            logMsg["loss/penalty"] = penalty.item()
     
 def val(net,val_loader,k):
     net.eval()
@@ -343,10 +364,17 @@ if args.pretrained:
 
 
 ## Location for saving the models 
-folder = 'Clothing1M'
+folder = 'Clothing1M' + '_' + str(args.name)
 model_save_loc = './checkpoint/' + folder
 if not os.path.exists(model_save_loc):
     os.mkdir(model_save_loc)
+
+## wandb
+if (wandb != None):
+    wandb.init(project="Clothing1M", entity="andy-su", name=folder)
+    wandb.config.update(args)
+    wandb.define_metric("loss", summary="min")
+    wandb.define_metric("acc/test", summary="max")
 
 net1 = nn.DataParallel(net1)
 net2 = nn.DataParallel(net2)
@@ -421,6 +449,15 @@ for epoch in range(0, args.num_epochs+1):
     print('\n| Epoch:%d \t  Acc: %.2f%% (%.2f%%) \n'%(epoch,accs[0],accs[1]))
     log.write('Epoch:%d \t  Acc: %.2f%% (%.2f%%) \n'%(epoch,accs[0],accs[1]))
     log.flush()  
+
+    ## wandb
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["acc/test"] = acc
+        logMsg["acc/val"] = acc1
+        logMsg["acc/val2"] = acc2
+        wandb.log(logMsg)
 
     if epoch<warm_up: 
         model_name_1 = 'Net1_warmup_pretrained.pth'     
