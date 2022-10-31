@@ -74,11 +74,8 @@ class webvision_dataset(Dataset):
                 #     print("%s data has a size of %d"%(self.mode,len(self.train_imgs)))   
                 if self.mode == "labeled":
                     sorted_indices  = np.argsort(probability.cpu().numpy())
-                    print("sorted_indices :", sorted_indices)
                     clean_count = int(sample_ratio*num_samples)
-                    print("clean_count :", clean_count)
                     pred_idx = sorted_indices[:clean_count]
-                    print("pred_idx :", pred_idx)
                     np.savez(save_file, index = pred_idx)
                     # refine probability
                     self.origin_prob = torch.clone(probability).cpu().numpy()
@@ -108,7 +105,7 @@ class webvision_dataset(Dataset):
             img2 = self.transform[1](image)
             img3 = self.transform[2](image) 
             img4 = self.transform[3](image)
-            return img1, img2, img3, img4, target, prob, None            
+            return img1, img2, img3, img4, target, prob, -1            
         elif self.mode=='unlabeled':
             img_path = self.train_imgs[index]
             image = Image.open(self.root+img_path).convert('RGB')    
@@ -116,7 +113,7 @@ class webvision_dataset(Dataset):
             img2 = self.transform[1](image) 
             img3 = self.transform[2](image) 
             img4 = self.transform[3](image)
-            return img1, img2, img3, img4, None
+            return img1, img2, img3, img4, -1
         elif self.mode=='all':
             img_path = self.train_imgs[index]
             target = self.train_labels[img_path]     
@@ -206,7 +203,7 @@ class webvision_dataloader():
             labeled_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transforms_train["labeled"], mode="labeled",num_class=self.num_class,pred=pred,probability=prob)              
             labeled_trainloader = DataLoader(
                 dataset=labeled_dataset, 
-                batch_size=self.batch_size,
+                batch_size=int(self.batch_size * 2 * sample_ratio),
                 shuffle=True,
                 num_workers=self.num_workers,
                 pin_memory=True)        
@@ -214,7 +211,7 @@ class webvision_dataloader():
             unlabeled_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transforms_train["unlabeled"], mode="unlabeled",num_class=self.num_class,pred=pred)                    
             unlabeled_trainloader = DataLoader(
                 dataset=unlabeled_dataset, 
-                batch_size=self.batch_size,
+                batch_size=int(self.batch_size * 2 * (1- sample_ratio)),
                 shuffle=True,
                 num_workers=self.num_workers,
                 pin_memory=True)     
