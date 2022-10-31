@@ -39,6 +39,7 @@ def argumentParse():
     parser.add_argument('-r', '--ratio', default=0.2 , type=float, help='noise ratio')
     parser.add_argument('--d_u',  default=0.5, type=float)
     parser.add_argument('--tau', default=5, type=float, help='filtering coefficient')
+    parser.add_argument('--d_up',  default=0, type=float)
     parser.add_argument('--seed', default=123)
     parser.add_argument('--gpuid', default="0", help='comma separated list of GPU(s) to use.')
     parser.add_argument('--resume', action='store_true', help = 'Resume from the warmup checkpoint')

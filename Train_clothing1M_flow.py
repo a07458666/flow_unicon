@@ -55,6 +55,7 @@ parser.add_argument('--flow_modules', default="256-256-256-256", type=str)
 parser.add_argument('--ema_decay', default=0.9, type=float, help='ema decay')
 parser.add_argument('--cond_size', default=512, type=int)
 parser.add_argument('--lambda_f', default=0.1, type=float, help='flow nll loss weight')
+# parser.add_argument('--lambda_u', default=30, type=float, help='weight for unsupervised loss')
 args = parser.parse_args()
 
 # torch.cuda.set_device(args.gpuid)
@@ -127,6 +128,13 @@ def train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, u
                 
         _, logits, flow_feature = net(mixed_input, get_feature = True)
 
+        # ## Test Lu loss
+        # logits_x = logits[:batch_size*2]
+        # logits_u = logits[batch_size*2:]        
+        
+        # ## Semi-supervised Loss
+        # Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
+
         Lx = -torch.mean(
             torch.sum(F.log_softmax(logits, dim=1) * mixed_target, dim=1)
         )
@@ -151,7 +159,8 @@ def train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, u
         penalty = torch.sum(prior * torch.log(prior / pred_mean))
 
         # loss = Lx  + args.lambda_c*loss_simCLR + penalty
-        loss = Lx + args.lambda_c*loss_simCLR + penalty + reg_f_var_loss + loss_flow
+        # loss = Lx + args.lambda_c*loss_simCLR + penalty + reg_f_var_loss + loss_flow
+        loss = Lx + ((lamb + 1) * Lu) + args.lambda_c*loss_simCLR + penalty + reg_f_var_loss + loss_flow
 
         ## Compute gradient and do SGD step
         optimizer.zero_grad()
@@ -362,10 +371,6 @@ def create_model():
     model = model.cuda()
     return model
 
-## Threshold Adjustment 
-def linear_rampup(current, warm_up, rampup_length=5):
-    current = np.clip((current-warm_up) / rampup_length, 0.0, 1.0)
-    return args.lambda_u*float(current)
 
 ## Predict
 def predict(inputs, flowNet, getPre = False):
@@ -558,8 +563,10 @@ for epoch in range(0, args.num_epochs+1):
         eval_loader = loader.run(0.5,'eval_train')  
         prob, paths = Calculate_JSD(epoch, net, flowNet)                          ## Calculate the JSD distances 
         threshold   = torch.mean(prob)                                           ## Simply Take the average as the threshold
-        SR = torch.sum(prob<threshold).item()/prob.size()[0]                    ## Calculate the Ratio of clean samples      
         
+        SR = torch.sum(prob<threshold).item()/prob.size()[0]                    ## Calculate the Ratio of clean samples   
+        # if threshold.item() < 0.4:
+        #     threshold = threshold + (torch.max(prob) - threshold)/5
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob=prob,  paths=paths)         ## Uniform Selection
         logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
         

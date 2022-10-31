@@ -99,6 +99,8 @@ def Selection_Rate(prob, pre_threshold):
         threshold = (args.jsd_decay * pre_threshold) + ((1 - args.jsd_decay) * threshold)
     if threshold.item() > args.d_u:
             threshold = threshold - (threshold-torch.min(prob))/args.tau
+    if threshold.item() < args.d_up:
+            threshold = threshold + (torch.max(prob) - threshold)/args.tau
     SR = torch.sum(prob<threshold).item()/args.num_samples
     print("threshold : ", torch.mean(prob))
     print("threshold(new) : ", threshold)
@@ -369,8 +371,8 @@ flowTrainer = FlowTrainer(args)
 flowNet = flowTrainer.create_model()
 
 # gpus
-# net = nn.DataParallel(net)
-# flowNet = nn.DataParallel(flowNet)
+net = nn.DataParallel(net)
+flowNet = nn.DataParallel(flowNet)
 
 cudnn.benchmark = True
 
