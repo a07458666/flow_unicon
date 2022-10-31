@@ -291,10 +291,11 @@ class FlowTrainer:
 
                 logMsg["loss/simCLR"] = loss_simCLR.item()
                 logMsg["loss/reg_f_var_loss"] = reg_f_var_loss.item()
-
-                logMsg["label_quality/unlabel_pseudo_JSD_mean"] = u_sources_pseudo.mean().item()
-                logMsg["label_quality/label_origin_JSD_mean"] = x_sources_origin.mean().item()
-                logMsg["label_quality/label_refine_JSD_mena"] = x_sources_refine.mean().item()
+                
+                if not self.args.isRealTask:
+                    logMsg["label_quality/unlabel_pseudo_JSD_mean"] = u_sources_pseudo.mean().item()
+                    logMsg["label_quality/label_origin_JSD_mean"] = x_sources_origin.mean().item()
+                    logMsg["label_quality/label_refine_JSD_mena"] = x_sources_refine.mean().item()
 
                 if self.args.w_ce:
                     logMsg["loss/ce_x"] = Lx.item()
@@ -338,7 +339,7 @@ class FlowTrainer:
         model = model.cuda()
         return model
 
-    def predict(self, flowNet, feature, mean = 0, std = 0.2, sample_n = 50):
+    def predict(self, flowNet, feature, mean = 0, std = 0, sample_n = 2):
         with torch.no_grad():
             batch_size = feature.size()[0]
             feature = feature.repeat(sample_n, 1, 1)
