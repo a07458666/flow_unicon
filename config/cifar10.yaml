@@ -9,3 +9,4 @@ warm_up: 10
 num_samples: 50000
 lambda_p: 50
 d_u: 0.5
+weight_decay: 5e-4

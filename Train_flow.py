@@ -450,8 +450,8 @@ if __name__ == '__main__':
     cudnn.benchmark = True
 
     ## Optimizer and Scheduler
-    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4) 
-    optimizerFlow = optim.SGD(flowNet.parameters(), lr=args.lr_f, momentum=0.9, weight_decay=5e-4)
+    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay) 
+    optimizerFlow = optim.SGD(flowNet.parameters(), lr=args.lr_f, momentum=0.9, weight_decay=args.weight_decay)
     # optimizerFlow = optim.AdamW(flowNet.parameters(), lr=args.lr_f)
 
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epochs, args.lr / 100)

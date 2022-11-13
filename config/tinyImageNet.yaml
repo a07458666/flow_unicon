@@ -11,3 +11,4 @@ lambda_p: 100
 Tu: 0.5
 alpha: 2
 flow_modules: 512-512-512-512
+weight_decay: 5e-4
