@@ -206,6 +206,7 @@ class webvision_dataloader():
                 batch_size=int(self.batch_size * 2 * sample_ratio),
                 shuffle=True,
                 num_workers=self.num_workers,
+                drop_last=True,
                 pin_memory=True)        
             
             unlabeled_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transforms_train["unlabeled"], mode="unlabeled",num_class=self.num_class,pred=pred)                    
@@ -214,6 +215,7 @@ class webvision_dataloader():
                 batch_size=int(self.batch_size * 2 * (1- sample_ratio)),
                 shuffle=True,
                 num_workers=self.num_workers,
+                drop_last=True,
                 pin_memory=True)     
             return labeled_trainloader, unlabeled_trainloader
         
@@ -234,6 +236,7 @@ class webvision_dataloader():
                 batch_size=self.batch_size * 2 * 4,
                 shuffle=False,
                 num_workers=self.num_workers,
+                drop_last=True,
                 pin_memory=True)               
             return eval_loader     
         
