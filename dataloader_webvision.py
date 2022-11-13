@@ -193,7 +193,7 @@ class webvision_dataloader():
             all_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transforms_train["warmup"], mode="all", num_class=self.num_class)                
             trainloader = DataLoader(
                 dataset=all_dataset, 
-                batch_size=self.batch_size*2,
+                batch_size=self.batch_size*2 * 4,
                 shuffle=True,
                 num_workers=self.num_workers,
                 pin_memory=True)                 
@@ -221,7 +221,7 @@ class webvision_dataloader():
             val_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transform_test, mode='val', num_class=self.num_class)      
             val_loader = DataLoader(
                 dataset=val_dataset, 
-                batch_size=self.batch_size*2,
+                batch_size=self.batch_size * 2 * 4,
                 shuffle=False,
                 num_workers=self.num_workers,
                 pin_memory=True)               
@@ -231,7 +231,7 @@ class webvision_dataloader():
             eval_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transform_test, mode='all', num_class=self.num_class)      
             eval_loader = DataLoader(
                 dataset=eval_dataset, 
-                batch_size=self.batch_size*2,
+                batch_size=self.batch_size * 2 * 4,
                 shuffle=False,
                 num_workers=self.num_workers,
                 pin_memory=True)               
