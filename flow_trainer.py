@@ -59,7 +59,7 @@ class FlowTrainer:
             net.train()
         num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
         
-        for batch_idx, (inputs, labels, path) in enumerate(dataloader):      
+        for batch_idx, (inputs, labels, path) in tqdm(enumerate(dataloader)):
             inputs, labels = inputs.cuda(), labels.cuda() 
             labels_one_hot = torch.nn.functional.one_hot(labels, self.args.num_class).type(torch.cuda.FloatTensor)
 
@@ -134,7 +134,7 @@ class FlowTrainer:
         unlabeled_train_iter = iter(unlabeled_trainloader)
         num_iter = (len(labeled_trainloader.dataset)//labeled_trainloader.batch_size)+1 
 
-        for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x, labels_x_o) in enumerate(labeled_trainloader):      
+        for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x, labels_x_o) in tqdm(enumerate(labeled_trainloader)): 
             try:
                 inputs_u, inputs_u2, inputs_u3, inputs_u4, labels_u_o = unlabeled_train_iter.next()
             except:
@@ -304,10 +304,10 @@ class FlowTrainer:
 
                 wandb.log(logMsg)
 
-        sys.stdout.write('\r')
-        sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Contrastive Loss:%.4f NLL(x) loss: %.2f NLL(u) loss: %.2f'
-                %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_simCLR.item(),  loss_nll_x.mean().item(), loss_nll_u.mean().item()))
-        sys.stdout.flush()
+            sys.stdout.write('\r')
+            sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Contrastive Loss:%.4f NLL(x) loss: %.2f NLL(u) loss: %.2f'
+                    %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_simCLR.item(),  loss_nll_x.mean().item(), loss_nll_u.mean().item()))
+            sys.stdout.flush()
         
 
     ## Calculate JSD
