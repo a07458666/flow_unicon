@@ -67,6 +67,7 @@ def argumentParse(input_args = None):
     parser.add_argument('--isRealTask', default=False, type=bool, help='')
     parser.add_argument('--useUncertainty', default=False, type=bool, help='')
     parser.add_argument('--lambda_f', default=1.0, type=float, help='flow nll loss weight')
+    parser.add_argument('--weight_decay', default=5e-4, type=float, help='SGD weight decay')
     # load yaml
     _add_args_from_yaml(parser, input_args)
 

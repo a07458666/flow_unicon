@@ -9,7 +9,8 @@ warm_up: 10
 lambda_p: 50
 Tu: 0.5
 alpha: 0.5
-flow_modules: 256-256-256-256
+flow_modules: 512-512-512-512
 cond_size: 512
 isRealTask: True
 num_samples: 65944
+weight_decay: 1e-3
