@@ -27,7 +27,7 @@ def unpickle(file):
 
 
 class cifar_dataset(Dataset): 
-    def __init__(self, dataset, sample_ratio, r, noise_mode, root_dir, transform, mode, noise_file='', pred=[], probability=[]): 
+    def __init__(self, dataset, sample_ratio, r, noise_mode, root_dir, transform, mode, noise_file='', pred=[], probability=[], densitys=[]): 
         
         self.r = r # noise ratio
         self.sample_ratio = sample_ratio
@@ -159,6 +159,8 @@ class cifar_dataset(Dataset):
 
                     ## Weights for label refinement
                     self.origin_prob = torch.clone(probability)
+                    if len(densitys) > 0:
+                        self.origin_densitys = torch.clone(densitys)
                     probability[probability<0.5] = 0
                     self.probability = [1-probability[i] for i in pred_idx]
 
@@ -313,7 +315,7 @@ class cifar_dataloader():
                     transforms.Normalize((0.507, 0.487, 0.441), (0.267, 0.256, 0.276)),
                 ])
                    
-    def run(self, sample_ratio, mode, pred=[], prob=[]):
+    def run(self, sample_ratio, mode, pred=[], prob=[], densitys=[]):
         if mode=='warmup':
             all_dataset = cifar_dataset(dataset=self.dataset, sample_ratio= sample_ratio, noise_mode=self.noise_mode, r=self.r, root_dir=self.root_dir, transform=self.transforms["warmup"], mode="all",noise_file=self.noise_file)                
             trainloader = DataLoader(
@@ -324,7 +326,7 @@ class cifar_dataloader():
             return trainloader
                                      
         elif mode=='train':
-            labeled_dataset = cifar_dataset(dataset=self.dataset, sample_ratio= sample_ratio, noise_mode=self.noise_mode, r=self.r, root_dir=self.root_dir, transform=self.transforms["labeled"], mode="labeled", noise_file=self.noise_file, pred=pred, probability=prob)              
+            labeled_dataset = cifar_dataset(dataset=self.dataset, sample_ratio= sample_ratio, noise_mode=self.noise_mode, r=self.r, root_dir=self.root_dir, transform=self.transforms["labeled"], mode="labeled", noise_file=self.noise_file, pred=pred, probability=prob, densitys=densitys)              
             labeled_trainloader = DataLoader(
                 dataset=labeled_dataset, 
                 # batch_size=self.batch_size,

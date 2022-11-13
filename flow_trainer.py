@@ -334,12 +334,126 @@ class FlowTrainer:
             JSD[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = dist
         return JSD
 
+    ## Calculate Density
+    def Calculate_Density(self, net, flowNet, num_samples, eval_loader):  
+        densitys   = torch.zeros(num_samples)  
+        input_y = torch.zeros(size=(eval_loader.batch_size * self.args.num_class, 1, self.args.num_class)).cuda()
+        
+        # sample_n = self.args.num_class
+        sample_n = 1
+
+        for b in range(eval_loader.batch_size):
+            for c in range(self.args.num_class):
+                input_y[self.args.num_class * b + c, 0, c] = 1.
+
+        for batch_idx, (inputs, targets, index) in tqdm(enumerate(eval_loader)):
+
+            # to one hot
+            targets = torch.zeros(eval_loader.batch_size, self.args.num_class).scatter_(1, targets.view(-1,1), 1).unsqueeze(1)
+
+            inputs, targets = inputs.cuda(), targets.cuda()
+            batch_size = inputs.size()[0]
+
+            ## Get outputs of both network
+            with torch.no_grad():
+                _, _, feature = net(inputs, get_feature=True)
+                feature = feature.repeat(sample_n, 1, 1)
+                # print("input_y", input_y.size())
+                # print("feature", feature.size())
+                input_y = targets
+                delta_p = torch.zeros(input_y.shape[0], input_y.shape[1], 1).cuda()
+                approx21, delta_log_p2 = flowNet(input_y, feature, delta_p)
+                approx2 = standard_normal_logprob(approx21).view(input_y.size()[0], -1).sum(1, keepdim=True)
+                delta_log_p2 = delta_log_p2.view(input_y.size()[0], input_y.shape[1], 1).sum(1)
+                log_p2 = (approx2 - delta_log_p2)
+                # print("log_p2", log_p2.size())
+                density1 = log_p2.view(sample_n, batch_size)
+                # print("density1", density1.size())
+                density1_mean = torch.mean(density1, dim=0, keepdim=False)
+                # density1_max = torch.max(density1, dim=0, keepdim=False)[0]
+                # density1_min = torch.min(density1, dim=0, keepdim=False)[0]
+                # density1_mean = density1_max - density1_min
+                # density1_mean = torch.var(density1, dim=0, keepdim=False)
+                # print("density1_mean", density1_mean.size())
+
+                with self.net_ema.average_parameters():
+                    with self.flowNet_ema .average_parameters():
+                        _, _, feature = net(inputs, get_feature=True)
+                        feature = feature.repeat(sample_n, 1, 1)
+                        input_y = targets
+                        delta_p = torch.zeros(input_y.shape[0], input_y.shape[1], 1).cuda()
+                        approx21, delta_log_p2 = flowNet(input_y, feature, delta_p)
+                        approx2 = standard_normal_logprob(approx21).view(input_y.size()[0], -1).sum(1, keepdim=True)
+                        delta_log_p2 = delta_log_p2.view(input_y.size()[0], input_y.shape[1], 1).sum(1)
+                        log_p2 = (approx2 - delta_log_p2)
+                        density2 = log_p2.view(sample_n, batch_size)
+                        density2_mean = torch.mean(density2, dim=0, keepdim=False)
+                        # density2_max = torch.max(density2, dim=0, keepdim=False)[0]
+                        # density2_min = torch.min(density2, dim=0, keepdim=False)[0]
+                        # density2_mean = density2_max - density2_min
+                        
+
+            ## Get the Prediction
+            density = (density1_mean + density2_mean) / 2
+            # print("d size :", density.size())
+            densitys[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = density
+        return densitys
+
+    ## Calculate Uncertainty
+    def Calculate_Uncertainty(self, net, flowNet, num_samples, eval_loader):  
+        print("Calculate_Uncertainty Rand")
+        uncertaintys   = torch.zeros(num_samples)  
+        
+        # sample_n = self.args.num_class
+        sample_n = 100
+
+        for batch_idx, (inputs, targets, index) in tqdm(enumerate(eval_loader)):
+            
+            # to one hot
+            targets = torch.zeros(eval_loader.batch_size, self.args.num_class).scatter_(1, targets.view(-1,1), 1).unsqueeze(1)
+
+            inputs, targets = inputs.cuda(), targets.cuda()
+            batch_size = inputs.size()[0]
+
+            ## Get outputs of both network
+            mean = 0
+            std = 1
+            with torch.no_grad():
+                with self.net_ema.average_parameters():
+                    with self.flowNet_ema .average_parameters():
+                        _, logits, feature = net(inputs, get_feature = True)
+                        batch_size = feature.size()[0]
+                        feature = feature.repeat(sample_n, 1, 1)
+                        input_z = torch.normal(mean = mean, std = std, size=(sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
+                        # input_z = torch.rand(sample_n * batch_size , self.args.num_class).unsqueeze(1).cuda()
+                        delta_p = torch.zeros(input_z.shape[0], input_z.shape[1], 1).cuda()
+
+                        approx21, _ = flowNet(input_z, feature, delta_p, reverse=True)
+                        probs = torch.tanh(approx21)
+                        # print("probs tanh", probs.size(), probs[:1])
+                        probs = torch.clamp(probs, min=0, max=1)
+                        # print("probs clamp", probs.size(), probs[:1])
+                        probs = F.normalize(probs, dim=2, p=1)
+                        # print("probs norm", probs.size(), probs[:1])
+                        probs = probs.view(sample_n, batch_size, self.args.num_class)
+                        probs_mean = torch.mean(probs, dim=0, keepdim=False)
+                        # print("probs", probs.size())
+                        entropy_val = self.entropy(probs_mean)
+                        # print("entropy_val", entropy_val.size())
+                        
+                        
+                        # print("probs_mean", probs_mean.size())
+
+            ## Get the Prediction
+            uncertaintys[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = entropy_val
+        return uncertaintys
+
     def create_model(self):
         model = cnf(self.args.num_class, self.args.flow_modules, self.cond_size, 1).cuda()
         model = model.cuda()
         return model
 
-    def predict(self, flowNet, feature, mean = 0, std = 0, sample_n = 2):
+    def predict(self, flowNet, feature, mean = 0, std = 0, sample_n = 4):
         with torch.no_grad():
             batch_size = feature.size()[0]
             feature = feature.repeat(sample_n, 1, 1)
@@ -507,3 +621,9 @@ class FlowTrainer:
     def sharpening(self, labels, T):
         labels = labels**(1/T)
         return labels / labels.sum(dim=1, keepdim=True)
+
+    def entropy(self, p):
+        return -p.mul((p + 1e-10).log2()).sum(dim=1)
+        # b = F.softmax(x, dim=dim) * F.log_softmax(x, dim=dim)
+        # e = b.sum(dim=1)
+        # return e
