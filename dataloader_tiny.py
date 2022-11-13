@@ -408,14 +408,14 @@ class tinyImagenet_dataloader():
             labeled_dataset = tiny_imagenet_dataset(SR, self.root,transform=self.transforms["labeled"], mode='labeled',  ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file, pred=pred, probability=prob,paths=paths)
             labeled_loader = DataLoader(
                 dataset=labeled_dataset, 
-                batch_size=int(self.batch_size * (2 * SR)),
+                batch_size=int(self.batch_size * 2 * SR),
                 shuffle=True, drop_last= True,
                 num_workers=self.num_workers)
 
             unlabeled_dataset = tiny_imagenet_dataset(SR, self.root,transform=self.transforms["unlabeled"], mode='unlabeled',  ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file, pred=pred, probability=prob,paths=paths)
             unlabeled_loader = DataLoader(
                 dataset=unlabeled_dataset, 
-                batch_size=int(self.batch_size * (2 * (1 - SR))),
+                batch_size=int(self.batch_size * 2 * (1 - SR)),
                 shuffle=True, drop_last= True,
                 num_workers=self.num_workers)   
             return labeled_loader,unlabeled_loader

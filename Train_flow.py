@@ -413,7 +413,11 @@ if __name__ == '__main__':
 
     ## wandb
     if (wandb != None):
-        wandb.init(project="FlowUNICON", entity="andy-su", name=folder)
+        if args.dataset == 'cifar10' or args.dataset == 'cifar100':
+            project_name = "FlowUNICON"
+        else:
+            project_name = "FlowUNICON_" + args.dataset
+        wandb.init(project=project_name, entity="andy-su", name=folder)
         wandb.run.log_code(".")
         wandb.config.update(args)
         wandb.define_metric("acc/test", summary="max")
@@ -423,10 +427,10 @@ if __name__ == '__main__':
         wandb.define_metric("loss/nll_var", summary="min")
     
     ## Call the dataloader
-    if args.dataset== 'cifar10' or args.dataset== 'cifar100':
+    if args.dataset == 'cifar10' or args.dataset== 'cifar100':
         loader = dataloader(args.dataset, r=args.ratio, noise_mode=args.noise_mode,batch_size=args.batch_size,num_workers=args.num_workers,\
             root_dir=model_save_loc, noise_file='%s/clean_%.4f_%s.npz'%(args.data_path,args.ratio, args.noise_mode))
-    elif args.dataset== 'TinyImageNet':
+    elif args.dataset == 'TinyImageNet':
         loader = dataloader(root=args.data_path, batch_size=args.batch_size, num_workers=args.num_workers, ratio = args.ratio, noise_mode = args.noise_mode, noise_file='%s/clean_%.2f_%s.npz'%(args.data_path,args.ratio, args.noise_mode))
     elif args.dataset == 'WebVision':
         loader = dataloader(batch_size=args.batch_size,num_workers=args.num_workers,root_dir=args.data_path, num_class=args.num_class)
@@ -440,7 +444,6 @@ if __name__ == '__main__':
 
     # gpus
     if len(args.gpuid) > 1:
-        # print("mutle gpu!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         net = nn.DataParallel(net)
         flowNet = nn.DataParallel(flowNet)
 
