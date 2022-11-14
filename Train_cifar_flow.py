@@ -242,8 +242,8 @@ def train(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, l
         optimizerFlow.zero_grad()
         loss.backward()
         if args.clip_grad:
-            torch.nn.utils.clip_grad_value_(net.parameters(), 4)
-            torch.nn.utils.clip_grad_value_(flownet.parameters(), 4)
+            # torch.nn.utils.clip_grad_norm_(net.parameters(), 1e-10)
+            torch.nn.utils.clip_grad_norm_(flownet.parameters(), 1e-10)
         if args.fix == 'flow':
             optimizer.step()
         elif args.fix == 'net':
