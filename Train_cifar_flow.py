@@ -234,8 +234,8 @@ def train(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, l
         # print("loss_CLR: ", args.lambda_c * loss_simCLR )
         ## Total Loss
         loss = args.lambda_c * loss_simCLR + reg_f_var_loss + (-log_p2).mean() #loss_nll_x.mean() + lamb_u * loss_nll_u.mean() #+ penalty #  Lx + lamb * Lu 
-        if args.clip_grad:
-            loss = clipping_grad(loss)
+        # if args.clip_grad:
+        #     loss = clipping_grad(loss)
         
         # Compute gradient and Do SGD step
         optimizer.zero_grad()
