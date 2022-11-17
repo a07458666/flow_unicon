@@ -59,7 +59,8 @@ def argumentParse(input_args = None):
     parser.add_argument('--ema_jsd', action='store_true', help = 'JSD Moving Average')
     parser.add_argument('--jsd_decay', default=0.9, type=float, help='Exponential Moving Average decay')
     # parser.add_argument('--thr', default=0.693, type=float, help='Threadhold JSD')
-    parser.add_argument('--clip_grad', action='store_true', help = 'cliping grad')
+    # parser.add_argument('--clip_grad', action='store_true', help = 'cliping grad')
+    parser.add_argument('--clip_grad', default=True, help = 'cliping grad')
     parser.add_argument('--pretrained', action='store_true', help = 'pretrained(Clothing1M)')
     parser.add_argument('--split', action='store_true', help = 'split flow loss to x, u')
     parser.add_argument('--w_ce', action='store_false', help = 'train with cross entrioy')
@@ -68,6 +69,9 @@ def argumentParse(input_args = None):
     parser.add_argument('--useUncertainty', default=False, type=bool, help='')
     parser.add_argument('--lambda_f', default=1.0, type=float, help='flow nll loss weight')
     parser.add_argument('--weight_decay', default=5e-4, type=float, help='SGD weight decay')
+    parser.add_argument('--flow_sp', default=True, type=bool, help='flow sharpening')
+    parser.add_argument('--flow_ssl', default=False, type=bool, help='flow ssl loss')
+    
     # load yaml
     _add_args_from_yaml(parser, input_args)
 
