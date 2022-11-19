@@ -169,20 +169,20 @@ class ResNet(nn.Module):
             return F.normalize(ssl_out, dim=1), class_out
 
 
-def ResNet18(num_classes=10):
-    return ResNet(PreActBlock, [2,2,2,2], num_classes=num_classes)
+def ResNet18(num_classes=10, feature_dim = 512):
+    return ResNet(PreActBlock, [2,2,2,2], num_classes=num_classes, feature_dim=feature_dim)
 
-def ResNet34(num_classes=10):
-    return ResNet(BasicBlock, [3,4,6,3], num_classes=num_classes)
+def ResNet34(num_classes=10, feature_dim = 512):
+    return ResNet(BasicBlock, [3,4,6,3], num_classes=num_classes, feature_dim=feature_dim)
 
-def ResNet50(num_classes=14):
-    return ResNet(Bottleneck, [3,4,6,3], num_classes=num_classes)
+def ResNet50(num_classes=14, feature_dim = 512):
+    return ResNet(Bottleneck, [3,4,6,3], num_classes=num_classes, feature_dim=feature_dim)
 
-def ResNet101(num_classes=10):
-    return ResNet(Bottleneck, [3,4,23,3], num_classes=num_classes)
+def ResNet101(num_classes=10, feature_dim = 512):
+    return ResNet(Bottleneck, [3,4,23,3], num_classes=num_classes, feature_dim=feature_dim)
 
-def ResNet152(num_classes=10):
-    return ResNet(Bottleneck, [3,8,36,3], num_classes=num_classes)
+def ResNet152(num_classes=10, feature_dim = 512):
+    return ResNet(Bottleneck, [3,8,36,3], num_classes=num_classes, feature_dim=feature_dim)
 
 
 def test():

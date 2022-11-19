@@ -1,9 +1,9 @@
 import yaml  
 import argparse
 
-def _add_args_from_yaml(given_parser):
+def _add_args_from_yaml(given_parser, input_args):
     given_parser.add_argument('-c','--config_yaml', default= None, type=str, metavar='FILE', help='YAML config file specifying default arguments')
-    given_configs, remaining = given_parser.parse_known_args() 
+    given_configs, remaining = given_parser.parse_known_args(input_args)
     if given_configs.config_yaml: 
         with open(given_configs.config_yaml, 'r', encoding='utf-8') as f: 
             cfgs = yaml.safe_load_all(f) 
@@ -17,7 +17,7 @@ def _add_args_from_yaml(given_parser):
 
 
 # Priority: command arg > yaml
-def argumentParse():
+def argumentParse(input_args = None):
     print("start to argument parse")
     parser = argparse.ArgumentParser()
     # trainer config
@@ -37,12 +37,14 @@ def argumentParse():
     parser.add_argument('--Tx', default=0.5, type=float, help='sharpening temperature')
     parser.add_argument('--num_epochs', default=350, type=int)
     parser.add_argument('-r', '--ratio', default=0.2 , type=float, help='noise ratio')
-    parser.add_argument('--d_u',  default=0.5, type=float)
+    parser.add_argument('--d_u',  default=0.7, type=float)
     parser.add_argument('--tau', default=5, type=float, help='filtering coefficient')
+    parser.add_argument('--d_up',  default=0, type=float)
     parser.add_argument('--seed', default=123)
     parser.add_argument('--gpuid', default="0", help='comma separated list of GPU(s) to use.')
     parser.add_argument('--resume', action='store_true', help = 'Resume from the warmup checkpoint')
     parser.add_argument('--num_class', default=10, type=int)
+    parser.add_argument('--num_workers', default=4, type=int)
     parser.add_argument('--data_path', default='./data/cifar10', type=str, help='path to dataset')
     parser.add_argument('--dataset', default='cifar10', type=str)
     parser.add_argument('--flow_modules', default="8-8-8-8", type=str)
@@ -56,17 +58,23 @@ def argumentParse():
     parser.add_argument('--num_samples', default=50000, type=int)
     parser.add_argument('--ema_jsd', action='store_true', help = 'JSD Moving Average')
     parser.add_argument('--jsd_decay', default=0.9, type=float, help='Exponential Moving Average decay')
-    parser.add_argument('--thr', default=0.693, type=float, help='Threadhold JSD')
-    parser.add_argument('--clip_grad', action='store_true', help = 'cliping grad')
+    # parser.add_argument('--thr', default=0.693, type=float, help='Threadhold JSD')
+    # parser.add_argument('--clip_grad', action='store_true', help = 'cliping grad')
+    parser.add_argument('--clip_grad', default=True, help = 'cliping grad')
     parser.add_argument('--pretrained', action='store_true', help = 'pretrained(Clothing1M)')
     parser.add_argument('--split', action='store_true', help = 'split flow loss to x, u')
     parser.add_argument('--w_ce', action='store_false', help = 'train with cross entrioy')
     parser.add_argument('--cond_size', default=128, type=int)
-    parser.add_argument('--isRealTask', default=False, type=bool, help='') 
+    parser.add_argument('--isRealTask', default=False, type=bool, help='')
+    parser.add_argument('--useUncertainty', default=False, type=bool, help='')
     parser.add_argument('--lambda_f', default=1.0, type=float, help='flow nll loss weight')
+    parser.add_argument('--weight_decay', default=5e-4, type=float, help='SGD weight decay')
+    parser.add_argument('--flow_sp', default=True, type=bool, help='flow sharpening')
+    parser.add_argument('--flow_ssl', default=False, type=bool, help='flow ssl loss')
+    
     # load yaml
-    _add_args_from_yaml(parser)
+    _add_args_from_yaml(parser, input_args)
 
-    args = parser.parse_args()
+    args = parser.parse_args(input_args)
 
     return args

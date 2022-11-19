@@ -59,7 +59,7 @@ class FlowTrainer:
             net.train()
         num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
         
-        for batch_idx, (inputs, labels, path) in enumerate(dataloader):      
+        for batch_idx, (inputs, labels, path) in tqdm(enumerate(dataloader)):
             inputs, labels = inputs.cuda(), labels.cuda() 
             labels_one_hot = torch.nn.functional.one_hot(labels, self.args.num_class).type(torch.cuda.FloatTensor)
 
@@ -74,13 +74,14 @@ class FlowTrainer:
             logFeature(feature_flow)            
 
             # == flow ==
-            delta_p = torch.zeros(flow_labels.shape[0], flow_labels.shape[1], 1).cuda()
-            approx21, delta_log_p2 = flownet(flow_labels, feature_flow, delta_p)
+            loss_nll, log_p2 = self.log_prob(flow_labels, feature_flow, flownet)
+            # delta_p = torch.zeros(flow_labels.shape[0], flow_labels.shape[1], 1).cuda()
+            # approx21, delta_log_p2 = flownet(flow_labels, feature_flow, delta_p)
             
-            approx2 = standard_normal_logprob(approx21).view(flow_labels.size()[0], -1).sum(1, keepdim=True)
-            delta_log_p2 = delta_log_p2.view(flow_labels.size()[0], flow_labels.shape[1], 1).sum(1)
-            log_p2 = (approx2 - delta_log_p2)
-            loss_nll = -log_p2.mean()
+            # approx2 = standard_normal_logprob(approx21).view(flow_labels.size()[0], -1).sum(1, keepdim=True)
+            # delta_log_p2 = delta_log_p2.view(flow_labels.size()[0], flow_labels.shape[1], 1).sum(1)
+            # log_p2 = (approx2 - delta_log_p2)
+            # loss_nll = -log_p2.mean()
             # == flow end ===
 
             if self.args.w_ce:
@@ -134,7 +135,7 @@ class FlowTrainer:
         unlabeled_train_iter = iter(unlabeled_trainloader)
         num_iter = (len(labeled_trainloader.dataset)//labeled_trainloader.batch_size)+1 
 
-        for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x, labels_x_o) in enumerate(labeled_trainloader):      
+        for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x, labels_x_o) in enumerate(labeled_trainloader): 
             try:
                 inputs_u, inputs_u2, inputs_u3, inputs_u4, labels_u_o = unlabeled_train_iter.next()
             except:
@@ -157,11 +158,17 @@ class FlowTrainer:
                     with self.flowNet_ema.average_parameters():
                         pu_net_ema, pu_flow_ema = self.get_pseudo_label(net, flownet, inputs_u, inputs_u2, std = self.args.pseudo_std)
                         pu_net_ema_sp = self.sharpening(pu_net_ema, self.args.Tu)
-                        pu_flow_ema_sp = self.sharpening(pu_flow_ema, lamb_Tu)
+                        if self.args.flow_sp:
+                            pu_flow_ema_sp = self.sharpening(pu_flow_ema, lamb_Tu)
+                        else:
+                            pu_flow_ema_sp = pu_flow_ema
         
                 pu_net, pu_flow = self.get_pseudo_label(net, flownet, inputs_u, inputs_u2, std = self.args.pseudo_std)
                 pu_net_sp = self.sharpening(pu_net, self.args.Tu)
-                pu_flow_sp = self.sharpening(pu_flow, lamb_Tu)
+                if self.args.flow_sp:
+                    pu_flow_sp = self.sharpening(pu_flow, lamb_Tu)
+                else:
+                    pu_flow_sp = pu_flow
                 
                 ## Pseudo-label
                 if self.args.w_ce:
@@ -202,12 +209,27 @@ class FlowTrainer:
                     x_sources_origin = js_distance(labels_x, labels_x_o, self.args.num_class)
                     x_sources_refine = js_distance(targets_x, labels_x_o, self.args.num_class)
 
-            ## Unsupervised Contrastive Loss
-            f1, _ = net(inputs_u3)
-            f2, _ = net(inputs_u4)
-            features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+            ## flow Contrastive Loss
+            if self.args.flow_ssl:
+                f1, _, flow_feature1 = net(inputs_u3, get_feature = True)
+                f2, _, flow_feature2 = net(inputs_u4, get_feature = True)
+                features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
 
-            loss_simCLR = self.contrastive_criterion(features)
+                ssl_feature  = torch.cat([flow_feature1, flow_feature2], dim=0)
+                ssl_targets = torch.cat([targets_u.unsqueeze(1).cuda(), targets_u.unsqueeze(1).cuda()], dim=0)
+
+                loss_flow_ssl, _ = self.log_prob(ssl_targets, ssl_feature, flownet)
+                print("loss_flow_ssl ", loss_flow_ssl)
+                print("loss_flow_ssl size ", loss_flow_ssl.size())
+                loss_simCLR = self.contrastive_criterion(features)
+
+            ## Unsupervised Contrastive Loss
+            else:
+                f1, _ = net(inputs_u3)
+                f2, _ = net(inputs_u4)
+                features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+                loss_simCLR = self.contrastive_criterion(features)
+
 
             all_inputs  = torch.cat([inputs_x3, inputs_x4, inputs_u3, inputs_u4], dim=0)
             all_targets = torch.cat([targets_x, targets_x, targets_u, targets_u], dim=0)
@@ -234,13 +256,14 @@ class FlowTrainer:
                 loss_unicon = Lx + lamb * Lu + penalty
 
             ## Flow loss
-            flow_mixed_target = mixed_target.unsqueeze(1).cuda()
-            delta_p = torch.zeros(flow_mixed_target.shape[0], flow_mixed_target.shape[1], 1).cuda() 
-            approx21, delta_log_p2 = flownet(flow_mixed_target, flow_feature, delta_p)
+            _, log_p2 = self.log_prob(mixed_target.unsqueeze(1).cuda(), flow_feature, flownet)
+            # flow_mixed_target = mixed_target.unsqueeze(1).cuda()
+            # delta_p = torch.zeros(flow_mixed_target.shape[0], flow_mixed_target.shape[1], 1).cuda() 
+            # approx21, delta_log_p2 = flownet(flow_mixed_target, flow_feature, delta_p)
             
-            approx2 = standard_normal_logprob(approx21).view(mixed_target.size()[0], -1).sum(1, keepdim=True)
-            delta_log_p2 = delta_log_p2.view(flow_mixed_target.size()[0], flow_mixed_target.shape[1], 1).sum(1)
-            log_p2 = (approx2 - delta_log_p2)
+            # approx2 = standard_normal_logprob(approx21).view(flow_mixed_target.size()[0], -1).sum(1, keepdim=True)
+            # delta_log_p2 = delta_log_p2.view(flow_mixed_target.size()[0], flow_mixed_target.shape[1], 1).sum(1)
+            # log_p2 = (approx2 - delta_log_p2)
 
             lamb_u = linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.linear_u, self.args.lambda_flow_u) + self.args.lamb_u_base
             
@@ -252,10 +275,11 @@ class FlowTrainer:
                 loss_flow = (-log_p2).mean()
 
             ## Total Loss
+            loss = self.args.lambda_c * loss_simCLR + (self.args.lambda_f * loss_flow) + reg_f_var_loss
             if self.args.w_ce:
-                loss = loss_unicon + self.args.lambda_c * loss_simCLR + (self.args.lambda_f * loss_flow) + reg_f_var_loss
-            else:
-                loss = self.args.lambda_c * loss_simCLR + (self.args.lambda_f * loss_flow) + reg_f_var_loss
+                loss += loss_unicon
+            if self.args.flow_ssl:
+                loss += self.args.lambda_c * loss_flow_ssl
 
             # Compute gradient and Do SGD step
             optimizer.zero_grad()
@@ -291,22 +315,25 @@ class FlowTrainer:
 
                 logMsg["loss/simCLR"] = loss_simCLR.item()
                 logMsg["loss/reg_f_var_loss"] = reg_f_var_loss.item()
-
-                logMsg["label_quality/unlabel_pseudo_JSD_mean"] = u_sources_pseudo.mean().item()
-                logMsg["label_quality/label_origin_JSD_mean"] = x_sources_origin.mean().item()
-                logMsg["label_quality/label_refine_JSD_mena"] = x_sources_refine.mean().item()
+                
+                if not self.args.isRealTask:
+                    logMsg["label_quality/unlabel_pseudo_JSD_mean"] = u_sources_pseudo.mean().item()
+                    logMsg["label_quality/label_origin_JSD_mean"] = x_sources_origin.mean().item()
+                    logMsg["label_quality/label_refine_JSD_mena"] = x_sources_refine.mean().item()
 
                 if self.args.w_ce:
                     logMsg["loss/ce_x"] = Lx.item()
                     logMsg["loss/mse_u"] = Lu.item()
                     logMsg["loss/penalty"] = penalty.item()
+                if self.args.flow_ssl:
+                    logMsg["loss/flow_ssl"] = loss_flow_ssl.item()
 
                 wandb.log(logMsg)
 
-        sys.stdout.write('\r')
-        sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Contrastive Loss:%.4f NLL(x) loss: %.2f NLL(u) loss: %.2f'
-                %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_simCLR.item(),  loss_nll_x.mean().item(), loss_nll_u.mean().item()))
-        sys.stdout.flush()
+            sys.stdout.write('\r')
+            sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Contrastive Loss:%.4f NLL(x) loss: %.2f NLL(u) loss: %.2f'
+                    %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_simCLR.item(),  loss_nll_x.mean().item(), loss_nll_u.mean().item()))
+            sys.stdout.flush()
         
 
     ## Calculate JSD
@@ -333,12 +360,130 @@ class FlowTrainer:
             JSD[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = dist
         return JSD
 
+    ## Calculate Density
+    def Calculate_Density(self, net, flowNet, num_samples, eval_loader):  
+        densitys   = torch.zeros(num_samples)  
+        input_y = torch.zeros(size=(eval_loader.batch_size * self.args.num_class, 1, self.args.num_class)).cuda()
+        
+        # sample_n = self.args.num_class
+        sample_n = 1
+
+        for b in range(eval_loader.batch_size):
+            for c in range(self.args.num_class):
+                input_y[self.args.num_class * b + c, 0, c] = 1.
+
+        for batch_idx, (inputs, targets, index) in tqdm(enumerate(eval_loader)):
+
+            # to one hot
+            targets = torch.zeros(eval_loader.batch_size, self.args.num_class).scatter_(1, targets.view(-1,1), 1).unsqueeze(1)
+
+            inputs, targets = inputs.cuda(), targets.cuda()
+            batch_size = inputs.size()[0]
+
+            ## Get outputs of both network
+            with torch.no_grad():
+                _, _, feature = net(inputs, get_feature=True)
+                feature = feature.repeat(sample_n, 1, 1)
+                # print("input_y", input_y.size())
+                # print("feature", feature.size())
+                
+                _, log_p2 = self.log_prob(targets, feature, flowNet)
+                
+                # input_y = targets
+                # delta_p = torch.zeros(input_y.shape[0], input_y.shape[1], 1).cuda()
+                # approx21, delta_log_p2 = flowNet(input_y, feature, delta_p)
+                # approx2 = standard_normal_logprob(approx21).view(input_y.size()[0], -1).sum(1, keepdim=True)
+                # delta_log_p2 = delta_log_p2.view(input_y.size()[0], input_y.shape[1], 1).sum(1)
+                # log_p2 = (approx2 - delta_log_p2)
+                # print("log_p2", log_p2.size())
+                density1 = log_p2.view(sample_n, batch_size)
+                # print("density1", density1.size())
+                density1_mean = torch.mean(density1, dim=0, keepdim=False)
+                # density1_max = torch.max(density1, dim=0, keepdim=False)[0]
+                # density1_min = torch.min(density1, dim=0, keepdim=False)[0]
+                # density1_mean = density1_max - density1_min
+                # density1_mean = torch.var(density1, dim=0, keepdim=False)
+                # print("density1_mean", density1_mean.size())
+
+                with self.net_ema.average_parameters():
+                    with self.flowNet_ema .average_parameters():
+                        _, _, feature = net(inputs, get_feature=True)
+                        feature = feature.repeat(sample_n, 1, 1)
+                        _, log_p2 = self.log_prob(targets, feature, flowNet)
+                        # input_y = targets
+                        # delta_p = torch.zeros(input_y.shape[0], input_y.shape[1], 1).cuda()
+                        # approx21, delta_log_p2 = flowNet(input_y, feature, delta_p)
+                        # approx2 = standard_normal_logprob(approx21).view(input_y.size()[0], -1).sum(1, keepdim=True)
+                        # delta_log_p2 = delta_log_p2.view(input_y.size()[0], input_y.shape[1], 1).sum(1)
+                        # log_p2 = (approx2 - delta_log_p2)
+                        density2 = log_p2.view(sample_n, batch_size)
+                        density2_mean = torch.mean(density2, dim=0, keepdim=False)
+                        # density2_max = torch.max(density2, dim=0, keepdim=False)[0]
+                        # density2_min = torch.min(density2, dim=0, keepdim=False)[0]
+                        # density2_mean = density2_max - density2_min
+                        
+
+            ## Get the Prediction
+            density = (density1_mean + density2_mean) / 2
+            # print("d size :", density.size())
+            densitys[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = density
+        return densitys
+
+    ## Calculate Uncertainty
+    def Calculate_Uncertainty(self, net, flowNet, num_samples, eval_loader):  
+        print("Calculate_Uncertainty Rand")
+        uncertaintys   = torch.zeros(num_samples)  
+        
+        # sample_n = self.args.num_class
+        sample_n = 100
+
+        for batch_idx, (inputs, targets, index) in tqdm(enumerate(eval_loader)):
+            
+            # to one hot
+            targets = torch.zeros(eval_loader.batch_size, self.args.num_class).scatter_(1, targets.view(-1,1), 1).unsqueeze(1)
+
+            inputs, targets = inputs.cuda(), targets.cuda()
+            batch_size = inputs.size()[0]
+
+            ## Get outputs of both network
+            mean = 0
+            std = 1
+            with torch.no_grad():
+                with self.net_ema.average_parameters():
+                    with self.flowNet_ema .average_parameters():
+                        _, logits, feature = net(inputs, get_feature = True)
+                        batch_size = feature.size()[0]
+                        feature = feature.repeat(sample_n, 1, 1)
+                        input_z = torch.normal(mean = mean, std = std, size=(sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
+                        # input_z = torch.rand(sample_n * batch_size , self.args.num_class).unsqueeze(1).cuda()
+                        delta_p = torch.zeros(input_z.shape[0], input_z.shape[1], 1).cuda()
+
+                        approx21, _ = flowNet(input_z, feature, delta_p, reverse=True)
+                        probs = torch.tanh(approx21)
+                        # print("probs tanh", probs.size(), probs[:1])
+                        probs = torch.clamp(probs, min=0, max=1)
+                        # print("probs clamp", probs.size(), probs[:1])
+                        probs = F.normalize(probs, dim=2, p=1)
+                        # print("probs norm", probs.size(), probs[:1])
+                        probs = probs.view(sample_n, batch_size, self.args.num_class)
+                        probs_mean = torch.mean(probs, dim=0, keepdim=False)
+                        # print("probs", probs.size())
+                        entropy_val = self.entropy(probs_mean)
+                        # print("entropy_val", entropy_val.size())
+                        
+                        
+                        # print("probs_mean", probs_mean.size())
+
+            ## Get the Prediction
+            uncertaintys[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = entropy_val
+        return uncertaintys
+
     def create_model(self):
         model = cnf(self.args.num_class, self.args.flow_modules, self.cond_size, 1).cuda()
         model = model.cuda()
         return model
 
-    def predict(self, flowNet, feature, mean = 0, std = 0.2, sample_n = 50):
+    def predict(self, flowNet, feature, mean = 0, std = 0, sample_n = 4):
         with torch.no_grad():
             batch_size = feature.size()[0]
             feature = feature.repeat(sample_n, 1, 1)
@@ -506,3 +651,19 @@ class FlowTrainer:
     def sharpening(self, labels, T):
         labels = labels**(1/T)
         return labels / labels.sum(dim=1, keepdim=True)
+
+    def entropy(self, p):
+        return -p.mul((p + 1e-10).log2()).sum(dim=1)
+        # b = F.softmax(x, dim=dim) * F.log_softmax(x, dim=dim)
+        # e = b.sum(dim=1)
+        # return e
+
+    def log_prob(self, target, feature, flownet):
+        delta_p = torch.zeros(target.shape[0], target.shape[1], 1).cuda() 
+        approx21, delta_log_p2 = flownet(target, feature, delta_p)
+        
+        approx2 = standard_normal_logprob(approx21).view(target.size()[0], -1).sum(1, keepdim=True)
+        delta_log_p2 = delta_log_p2.view(target.size()[0], target.shape[1], 1).sum(1)
+        log_p2 = (approx2 - delta_log_p2)
+        nll = -log_p2.mean()
+        return nll, log_p2

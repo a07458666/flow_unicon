@@ -3,13 +3,14 @@ dataset: 'WebVision'
 num_epochs: 100
 num_class: 50
 lr: 0.01
-lr_f: 2e-4
+lr_f: 2e-5
 batch_size: 32
 warm_up: 10
 lambda_p: 50
 Tu: 0.5
 alpha: 0.5
-flow_modules: 256-256-256-256
+flow_modules: 512-512-512-512
 cond_size: 512
 isRealTask: True
 num_samples: 65944
+weight_decay: 1e-3
