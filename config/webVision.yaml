@@ -14,3 +14,5 @@ cond_size: 512
 isRealTask: True
 num_samples: 65944
 weight_decay: 1e-3
+flow_sp: False
+clip_grad: True
