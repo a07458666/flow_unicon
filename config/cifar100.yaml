@@ -11,3 +11,5 @@ Tu: 0.5
 d_u: 0.7
 flow_modules: 64-64-64-64
 weight_decay: 5e-4
+w_ce: False
+centering: True

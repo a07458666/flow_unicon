@@ -8,9 +8,10 @@ __all__ = ["CNF", "SequentialFlow"]
 class SequentialFlow(nn.Module):
     """A generalized nn.Sequential container for normalizing flows."""
 
-    def __init__(self, layer_list):
+    def __init__(self, layer_list, input_dim = 128):
         super(SequentialFlow, self).__init__()
         self.chain = nn.ModuleList(layer_list)
+        self.register_buffer("center", torch.zeros(1, input_dim))
 
 
     def forward(self, x, context, logpx=None, reverse=False, inds=None, integration_times=None):

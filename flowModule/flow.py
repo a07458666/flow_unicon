@@ -72,7 +72,7 @@ def build_model( input_dim, hidden_dims, context_dim, num_blocks, conditional, c
             bn_chain.append(a)
             bn_chain.append(b)
     chain = bn_chain
-    model = SequentialFlow(chain)
+    model = SequentialFlow(chain, input_dim)
 
     return model
 
