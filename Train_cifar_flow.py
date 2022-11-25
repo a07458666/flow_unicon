@@ -302,14 +302,8 @@ def warmup_standard(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimi
     for batch_idx, (inputs, labels, path) in enumerate(dataloader):      
         inputs, labels = inputs.cuda(), labels.cuda() 
         labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
-
-        if args.warmup_mixup:
-            mixed_input, mixed_target = mix_match(inputs, labels_one_hot, args.alpha_warmup)
-            feature, outputs = net(mixed_input)
-            flow_labels = mixed_target.unsqueeze(1).cuda()
-        else:  
-            feature, outputs = net(inputs)
-            flow_labels = labels_one_hot.unsqueeze(1).cuda()
+        feature, outputs = net(inputs)
+        flow_labels = labels_one_hot.unsqueeze(1).cuda()
         # mixed_target = distillation_label(labels_one_hot, outputs)
 
         logFeature(feature)            
@@ -434,10 +428,8 @@ class Jensen_Shannon(nn.Module):
         m = (p+q)/2
         return 0.5*kl_divergence(p, m) + 0.5*kl_divergence(q, m)
 
-def Selection_Rate(prob, pre_threshold):
+def Selection_Rate(prob):
     threshold = torch.mean(prob)
-    if args.ema_jsd:
-        threshold = (args.jsd_decay * pre_threshold) + ((1 - args.jsd_decay) * threshold)
     print("threshold : ", torch.mean(prob))
     print("threshold(new) : ", threshold)
     print("prob size : ", prob.size())
@@ -899,8 +891,6 @@ else:
 
 best_acc = 0
 
-jsd_threshold = args.thr
-
 ## Warmup and SSL-Training 
 for epoch in range(start_epoch,args.num_epochs+1):
     startTime = time.time() 
@@ -918,8 +908,7 @@ for epoch in range(start_epoch,args.num_epochs+1):
         ## Calculate JSD values and Filter Rate
         print("Calculate JSD")
         prob = Calculate_JSD(net, flowNet, num_samples)
-        SR , threshold = Selection_Rate(prob, jsd_threshold)
-        jsd_threshold = threshold
+        SR , threshold = Selection_Rate(prob)
         print('Train Net\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
         logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
