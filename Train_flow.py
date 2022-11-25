@@ -537,3 +537,6 @@ if __name__ == '__main__':
 
             save_model(net, flowNet, epoch, acc)
             best_acc = acc
+        if acc < best_acc - 10.:
+            print("early stop")
+            exit()
