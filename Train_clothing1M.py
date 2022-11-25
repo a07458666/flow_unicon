@@ -27,16 +27,17 @@ except ImportError:
 
 
 parser = argparse.ArgumentParser(description='PyTorch Clothing1M Training')
-parser.add_argument('--batch_size', default=32, type=int, help='train batchsize') 
-parser.add_argument('--lr', '--learning_rate', default=0.002, type=float, help='initial learning rate')   ## Set the learning rate to 0.005 for faster training at the beginning
+parser.add_argument('--batch_size', default=64, type=int, help='train batchsize') 
+parser.add_argument('--lr', '--learning_rate', default=0.02, type=float, help='initial learning rate')   ## Set the learning rate to 0.005 for faster training at the beginning
 parser.add_argument('--alpha', default=0.5, type=float, help='parameter for Beta')
 parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
 parser.add_argument('--T', default=0.5, type=float, help='sharpening temperature')
-parser.add_argument('--num_epochs', default=8, type=int)
+parser.add_argument('--num_epochs', default=200, type=int)
 parser.add_argument('--id', default='clothing1m')
 parser.add_argument('--data_path', default='./data/Clothing1M_org', type=str, help='path to dataset')
 parser.add_argument('--seed', default=123)
-parser.add_argument('--gpuid', default=0, type=int)
+# parser.add_argument('--gpuid', default=0, type=int)
+parser.add_argument('--gpuid', default="0", help='comma separated list of GPU(s) to use.')
 parser.add_argument('--pretrained', default=True, type=bool)
 parser.add_argument('--num_class', default=14, type=int)
 parser.add_argument('--num_batches', default=1000, type=int)
@@ -46,7 +47,8 @@ parser.add_argument('--name', default="", type=str)
 
 args = parser.parse_args()
 
-torch.cuda.set_device(args.gpuid)
+os.environ['CUDA_VISIBLE_DEVICES'] = args.gpuid
+# torch.cuda.set_device(args.gpuid)
 random.seed(args.seed)
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed_all(args.seed)
@@ -324,7 +326,7 @@ class SemiLoss(object):
 log = open('./checkpoint/%s.txt'%args.id,'w')     
 log.flush()
 
-loader = dataloader.clothing_dataloader(root=args.data_path, batch_size=args.batch_size, warmup_batch_size = args.batch_size*2, num_workers=8, num_batches=args.num_batches)
+loader = dataloader.clothing_dataloader(root=args.data_path, batch_size=args.batch_size, warmup_batch_size = args.batch_size*4, num_workers=8, num_batches=args.num_batches)
 print('| Building Net')
 
 model = get_model()
@@ -372,6 +374,7 @@ if not os.path.exists(model_save_loc):
 ## wandb
 if (wandb != None):
     wandb.init(project="Clothing1M", entity="andy-su", name=folder)
+    wandb.run.log_code(".")
     wandb.config.update(args)
     wandb.define_metric("loss", summary="min")
     wandb.define_metric("acc/test", summary="max")
