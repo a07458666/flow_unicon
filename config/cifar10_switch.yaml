@@ -1,0 +1,14 @@
+data_path: './data/cifar10'
+dataset: 'cifar10'
+alpha: 4
+num_epochs: 350
+num_class: 10
+lr: 2e-2
+lr_f: 4e-5
+warm_up: 10
+num_samples: 50000
+lambda_p: 50
+d_u: 0.5
+weight_decay: 5e-4
+# flow_modules: '128-128-128-128'
+flow_modules: '512-512-512-512'
