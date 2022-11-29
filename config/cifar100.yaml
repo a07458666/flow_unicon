@@ -7,9 +7,13 @@ lr: 2e-2
 lr_f: 2e-5
 warm_up: 30
 num_samples: 50000
-Tu: 0.5
 d_u: 0.7
 flow_modules: 64-64-64-64
 weight_decay: 5e-4
 w_ce: False
 centering: True
+sharpening: 'DINO'
+Tu: 0.03
+Tu_warmup: 0.02
+center_momentum: 0.8
+decay: 0.99

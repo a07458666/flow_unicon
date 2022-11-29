@@ -234,8 +234,6 @@ def train(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, l
         # print("loss_CLR: ", args.lambda_c * loss_simCLR )
         ## Total Loss
         loss = args.lambda_c * loss_simCLR + reg_f_var_loss + (-log_p2).mean() #loss_nll_x.mean() + lamb_u * loss_nll_u.mean() #+ penalty #  Lx + lamb * Lu 
-        # if args.clip_grad:
-        #     loss = clipping_grad(loss)
         
         # Compute gradient and Do SGD step
         optimizer.zero_grad()
@@ -447,20 +445,6 @@ def Dist_Func(pred, target):
     JS_dist = Jensen_Shannon()
     dist = JS_dist(pred, F.one_hot(target, num_classes = args.num_class))
     return dist
-
-D_GRAD_CLIP = 1e14
-def clipping_grad(loss):
-    if loss.requires_grad:
-        def hook(grad):
-            if (wandb != None):
-                logMsg = {}
-                logMsg["epoch"] = epoch
-                logMsg["max_grads"] =  float(grad.abs().max().cpu().numpy())
-                wandb.log(logMsg)
-            clipped_grad = grad.clamp(min=-D_GRAD_CLIP, max=D_GRAD_CLIP)
-            return clipped_grad
-        loss.register_hook(hook)
-    return loss
 
 ## Calculate JSD
 def Calculate_JSD(net, flowNet, num_samples):  

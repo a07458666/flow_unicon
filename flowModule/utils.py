@@ -425,9 +425,9 @@ def set_parameter_requires_grad(model, flag = False):
     for param in model.parameters():
         param.requires_grad = flag
 
-def linear_rampup(current, warm_up, rampup_length=16, lambda_w=1.0):
+def linear_rampup(current, warm_up, rampup_length = 16, start = 0.0, end = 1.0):
     current = np.clip((current-warm_up) / rampup_length, 0.0, 1.0)
-    return lambda_w * float(current)
+    return start + (end - start) * float(current)
 
 
 def mix_match(inputs, targets, alpha = 4):

@@ -458,8 +458,8 @@ if __name__ == '__main__':
         scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.98)
         schedulerFlow = optim.lr_scheduler.ExponentialLR(optimizerFlow, 0.98)
     else:
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epochs, args.lr / 100)
-        schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, args.num_epochs, args.lr_f / 100)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epochs, args.lr / 1e2)
+        schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, args.num_epochs, args.lr_f / 1e2)
 
     flowTrainer.setEma(net, flowNet)
 

@@ -16,5 +16,8 @@ def kl_divergence(p, q):
 
 def js_distance(pred, target, num_class):
     JS_dist = Jensen_Shannon()
-    dist = JS_dist(pred, F.one_hot(target, num_classes = num_class))
+    if (target.dim() == 1):
+        dist = JS_dist(pred, F.one_hot(target, num_classes = num_class))
+    else:
+        dist = JS_dist(pred, target)
     return dist
