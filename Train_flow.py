@@ -451,15 +451,20 @@ if __name__ == '__main__':
 
     ## Optimizer and Scheduler
     optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay) 
-    optimizerFlow = optim.SGD(flowNet.parameters(), lr=args.lr_f, momentum=0.9, weight_decay=args.weight_decay)
-    # optimizerFlow = optim.AdamW(flowNet.parameters(), lr=args.lr_f)
+    if args.optimizer == 'SGD':
+        optimizerFlow = optim.SGD(flowNet.parameters(), lr=args.lr_f, momentum=0.9, weight_decay=args.weight_decay)
+    elif args.optimizer == 'AdamW':
+        optimizerFlow = optim.AdamW(flowNet.parameters(), lr=args.lr_f)
 
     if args.dataset=='TinyImageNet':
         scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.98)
-        schedulerFlow = optim.lr_scheduler.ExponentialLR(optimizerFlow, 0.98)
+        # schedulerFlow = optim.lr_scheduler.ExponentialLR(optimizerFlow, 0.98)
+    # else:
+    #     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epochs, args.lr / 1e2)
+    #     schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, args.num_epochs, args.lr_f / 1e2)
     else:
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epochs, args.lr / 1e2)
-        schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, args.num_epochs, args.lr_f / 1e2)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, 280, args.lr / 1e2)
+        # schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, 280, args.lr_f / 1e2)
 
     flowTrainer.setEma(net, flowNet)
 
@@ -518,7 +523,7 @@ if __name__ == '__main__':
             acc, confidence = flowTrainer.testByFlow(epoch, net, flowNet, test_loader)
         
         scheduler.step()
-        schedulerFlow.step()
+        # schedulerFlow.step()
 
         ## wandb
         if (wandb != None):

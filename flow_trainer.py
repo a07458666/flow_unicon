@@ -133,6 +133,7 @@ class FlowTrainer:
             batch_size = inputs_x.size(0)
 
             # Transform label to one-hot
+            labels_x_num = labels_x.cuda()
             labels_x = torch.zeros(batch_size, self.args.num_class).scatter_(1, labels_x.view(-1,1), 1)        
             w_x = w_x.view(-1,1).type(torch.FloatTensor) 
 
@@ -204,6 +205,13 @@ class FlowTrainer:
                     x_sources_origin = js_distance(labels_x, labels_x_o, self.args.num_class)
                     x_sources_refine = js_distance(targets_x, labels_x_o, self.args.num_class)
 
+            ## Supervised Contrastive Loss
+            if self.args.supcon:
+                fx_1, _ = net(inputs_x3)
+                fx_2, _ = net(inputs_x4)
+                features_x = torch.cat([fx_1.unsqueeze(1), fx_2.unsqueeze(1)], dim=1)
+                loss_supCon = self.contrastive_criterion(features_x, labels_x_num)
+
             ## Unsupervised Contrastive Loss
             f1, _ = net(inputs_u3)
             f2, _ = net(inputs_u4)
@@ -251,6 +259,8 @@ class FlowTrainer:
             loss = self.args.lambda_c * loss_simCLR + (self.args.lambda_f * loss_flow) + reg_f_var_loss
             if self.args.w_ce:
                 loss += loss_unicon
+            if self.args.supcon:
+                loss += self.args.lambda_c * loss_supCon
 
             # Compute gradient and Do SGD step
             optimizer.zero_grad()

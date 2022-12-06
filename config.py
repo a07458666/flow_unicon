@@ -66,7 +66,10 @@ def argumentParse(input_args = None):
     parser.add_argument('--centering', default=True, type=bool, help='use centering')
     parser.add_argument('--center_momentum', default=0.9, type=float, help='use centering')
     parser.add_argument('--w_ce', default=False, type=bool, help = 'train with cross entrioy')
+    parser.add_argument('--supcon', default=False, type=bool, help = 'train with cross entrioy')
     parser.add_argument('--sharpening', default="DINO", type=str, choices=['DINO', 'UNICON'], help = 'sharpening method')
+    parser.add_argument('--optimizer', default="SGD", type=str, choices=['AdamW', 'SGD'], help = 'flow optimizer ')
+    
     
     # load yaml
     _add_args_from_yaml(parser, input_args)
