@@ -119,7 +119,7 @@ class webvision_dataset(Dataset):
             target = self.train_labels[img_path]     
             image = Image.open(self.root+img_path).convert('RGB')   
             img = self.transform(image)
-            return img, target, index        
+            return img, target        
         elif self.mode=='val':
             img_path = self.val_imgs[index]
             target = self.val_labels[img_path]     

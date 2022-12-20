@@ -210,7 +210,7 @@ class cifar_dataset(Dataset):
             img, target = self.train_data[index], self.noise_label[index]
             img = Image.fromarray(img)
             img = self.transform(img)            
-            return img, target, index
+            return img, target
 
         elif self.mode=='val':
             img, target = self.test_data[index], self.test_label[index]
@@ -367,5 +367,14 @@ class cifar_dataloader():
                 dataset=ssl_dataset, 
                 batch_size=self.batch_size,
                 shuffle=True,
-                num_workers=self.num_workers, drop_last=True)         
+                num_workers=self.num_workers, drop_last=True)
             return ssl_trainloader
+        elif mode=='val_noise':
+            all_dataset = cifar_dataset(dataset=self.dataset, sample_ratio= sample_ratio, noise_mode=self.noise_mode, r=self.r, root_dir=self.root_dir, transform=self.transforms["warmup"], mode="all",noise_file=self.noise_file)                
+            trainloader = DataLoader(
+                dataset=all_dataset, 
+                batch_size=self.batch_size*2,
+                shuffle=False,
+                num_workers=0)             
+            return trainloader       
+            

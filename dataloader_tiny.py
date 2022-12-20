@@ -331,7 +331,7 @@ class tiny_imagenet_dataset(Dataset):
             target = self.train_labels.item()[img_path]
             image = Image.open(img_path).convert('RGB')
             img = self.transform(image)
-            return img, target, index
+            return img, target
 
         elif self.mode=='test':
             img_path = self.val_imgs[index]
