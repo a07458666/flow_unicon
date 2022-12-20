@@ -329,9 +329,9 @@ class FlowTrainer:
                     logMsg["loss/penalty"] = penalty.item()
 
                 if self.args.centering:
-                    logMsg["centering(max)"] = flownet.center.item().max()
-                    logMsg["centering(min)"] = flownet.center.item().min()
-                    logMsg["centering(min)"] = flownet.center.item().min()
+                    logMsg["centering(max)"] = flownet.center.max().item()
+                    logMsg["centering(min)"] = flownet.center.min().item()
+                    logMsg["centering(min)"] = flownet.center.min().item()
 
                 wandb.log(logMsg)
 
