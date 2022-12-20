@@ -8,6 +8,7 @@ from flowModule.logger import logFeature
 from flowModule.jensen_shannon import js_distance
 
 import time
+import math
 import sys
 from tqdm import tqdm
 from Contrastive_loss import *
@@ -32,7 +33,7 @@ class NegEntropy(object):
         return torch.mean(torch.sum(probs.log()*probs, dim=1))
 
 class FlowTrainer:
-    def __init__(self, args) -> None:
+    def __init__(self, args, dino_loss) -> None:
         self.args = args
         self.cond_size = args.cond_size
         self.mean = 0
@@ -51,6 +52,9 @@ class FlowTrainer:
 
         ## centering
         self.center_momentum = args.center_momentum
+
+        ## 
+        self.dino_loss = dino_loss
         return
 
     ## For Standard Training 
@@ -218,6 +222,20 @@ class FlowTrainer:
             features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
             loss_simCLR = self.contrastive_criterion(features)
 
+            ## DINO loss
+            if self.args.dino:
+                with self.net_ema.average_parameters():
+                    with self.flowNet_ema.average_parameters():
+                        f1_ema, _ = net(inputs_u)
+                        f2_ema, _ = net(inputs_u2)
+                student_output = torch.cat([f1, f2], dim=0)
+                teacher_output = torch.cat([f1_ema, f2_ema], dim=0)
+                loss_dino = self.dino_loss(student_output, teacher_output, epoch)
+
+                if not math.isfinite(loss_dino.item()):
+                    print("Loss is {}, stopping training".format(loss.item()), force=True)
+                    sys.exit(1)
+
 
             all_inputs  = torch.cat([inputs_x3, inputs_x4, inputs_u3, inputs_u4], dim=0)
             all_targets = torch.cat([targets_x, targets_x, targets_u, targets_u], dim=0)
@@ -261,6 +279,8 @@ class FlowTrainer:
                 loss += loss_unicon
             if self.args.supcon:
                 loss += self.args.lambda_c * loss_supCon
+            if self.args.dino:
+                loss += loss_dino
 
             # Compute gradient and Do SGD step
             optimizer.zero_grad()
@@ -315,6 +335,8 @@ class FlowTrainer:
                     logMsg["loss/ce_x"] = Lx.item()
                     logMsg["loss/mse_u"] = Lu.item()
                     logMsg["loss/penalty"] = penalty.item()
+                if self.args.dino:
+                    logMsg["loss/dino"] = loss_dino.item()
 
                 wandb.log(logMsg)
 

@@ -69,7 +69,19 @@ def argumentParse(input_args = None):
     parser.add_argument('--supcon', default=False, type=bool, help = 'train with cross entrioy')
     parser.add_argument('--sharpening', default="DINO", type=str, choices=['DINO', 'UNICON'], help = 'sharpening method')
     parser.add_argument('--optimizer', default="SGD", type=str, choices=['AdamW', 'SGD'], help = 'flow optimizer ')
+
+    # DINO loss
+    parser.add_argument('--dino', default=False, type=bool, help = 'add DINO loss')
     
+    # Temperature teacher parameters
+    parser.add_argument('--warmup_teacher_temp', default=0.04, type=float,
+        help="""Initial value for the teacher temperature: 0.04 works well in most cases.
+        Try decreasing it if the training loss does not decrease.""")
+    parser.add_argument('--teacher_temp', default=0.04, type=float, help="""Final value (after linear warmup)
+        of the teacher temperature. For most experiments, anything above 0.07 is unstable. We recommend
+        starting with the default value of 0.04 and increase this slightly if needed.""")
+    parser.add_argument('--warmup_teacher_temp_epochs', default=0, type=int,
+        help='Number of warmup epochs for the teacher temperature (Default: 30).')
     
     # load yaml
     _add_args_from_yaml(parser, input_args)

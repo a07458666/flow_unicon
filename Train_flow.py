@@ -23,6 +23,8 @@ from flow_trainer import FlowTrainer
 from tqdm import tqdm
 from config import argumentParse
 
+from DINO_loss import DINOLoss
+
 try:
     import wandb
 except ImportError:
@@ -438,8 +440,17 @@ if __name__ == '__main__':
     print('| Building net')
     net = create_model(args)
 
+    dino_loss = DINOLoss(
+        args.cond_size,
+        2,  # total number of crops = 2 global crops + local_crops_number
+        args.warmup_teacher_temp,
+        args.teacher_temp,
+        args.warmup_teacher_temp_epochs,
+        args.num_epochs,
+    ).cuda()
+
     # flow model
-    flowTrainer = FlowTrainer(args)
+    flowTrainer = FlowTrainer(args, dino_loss)
     flowNet = flowTrainer.create_model()
 
     # gpus
