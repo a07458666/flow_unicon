@@ -458,13 +458,15 @@ if __name__ == '__main__':
 
     if args.dataset=='TinyImageNet':
         scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.98)
-        # schedulerFlow = optim.lr_scheduler.ExponentialLR(optimizerFlow, 0.98)
-    # else:
-    #     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epochs, args.lr / 1e2)
-    #     schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, args.num_epochs, args.lr_f / 1e2)
+        schedulerFlow = optim.lr_scheduler.ExponentialLR(optimizerFlow, 0.98)
     else:
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, 280, args.lr / 1e2)
-        # schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, 280, args.lr_f / 1e2)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epochs, args.lr / 1e2)
+        schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, args.num_epochs, args.lr_f / 1e2)
+        # schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, 20, args.lr_f / 1e2, verbose=True)
+        # schedulerFlow = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizerFlow, 20, 2,  args.lr_f / 1e2)
+    # else:
+    #     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, 280, args.lr / 1e2)
+    #     schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, 280, args.lr_f / 1e2)
 
     flowTrainer.setEma(net, flowNet)
 
@@ -521,9 +523,11 @@ if __name__ == '__main__':
             acc, confidence, acc_ce, confidence_ce, acc_mix, confidence_mix = flowTrainer.testByFlow(epoch, net, flowNet, test_loader)
         else:
             acc, confidence = flowTrainer.testByFlow(epoch, net, flowNet, test_loader)
+            noise_valloader = loader.run(0, 'val_noise')
+            acc_nosie, confidence_noise = flowTrainer.testByFlow(epoch, net, flowNet, noise_valloader, test_num = 10000)
         
         scheduler.step()
-        # schedulerFlow.step()
+        schedulerFlow.step()
 
         ## wandb
         if (wandb != None):
@@ -532,6 +536,8 @@ if __name__ == '__main__':
             logMsg["runtime"] = time.time() - startTime
             logMsg["acc/test"] = acc
             logMsg["confidence score"] = confidence
+            logMsg["acc/noise_val"] = acc_nosie
+            logMsg["confidence score(noise)"] = confidence_noise
             if args.w_ce:
                 logMsg["acc/test(ce_head)"] = acc_ce
                 logMsg["confidence score(test_ce_head)"] = confidence_ce

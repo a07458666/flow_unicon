@@ -171,7 +171,7 @@ def warmup(epoch,net,optimizer,dataloader):
     net.train()
     num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
 
-    for batch_idx, (inputs, labels, index) in enumerate(dataloader):      
+    for batch_idx, (inputs, labels) in enumerate(dataloader):      
         inputs, labels = inputs.cuda(), labels.cuda() 
         optimizer.zero_grad()
         _, outputs = net(inputs)               
@@ -339,7 +339,7 @@ def Calculate_JSD(model1, model2, num_samples):
     JS_dist = Jensen_Shannon()
     JSD   = torch.zeros(num_samples)    
 
-    for batch_idx, (inputs, targets, index) in enumerate(eval_loader):
+    for batch_idx, (inputs, targets) in enumerate(eval_loader):
         inputs, targets = inputs.cuda(), targets.cuda()
         batch_size = inputs.size()[0]
 

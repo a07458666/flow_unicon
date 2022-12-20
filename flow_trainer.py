@@ -62,7 +62,7 @@ class FlowTrainer:
             net.train()
         num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
         
-        for batch_idx, (inputs, labels, path) in enumerate(dataloader):
+        for batch_idx, (inputs, labels) in enumerate(dataloader):
             inputs, labels = inputs.cuda(), labels.cuda() 
             labels_one_hot = torch.nn.functional.one_hot(labels, self.args.num_class).type(torch.cuda.FloatTensor)
             _, outputs, feature_flow = net(inputs, get_feature = True)
@@ -163,10 +163,16 @@ class FlowTrainer:
                 pu_entropy = self.entropy(pu_flow_ema).mean()
 
                 ## Pseudo-label
-                if self.args.w_ce:
-                    targets_u = (pu_flow_sp + pu_net_sp + pu_flow_ema_sp + pu_net_ema_sp) / 4
-                else:
-                    targets_u = (pu_flow_ema_sp + pu_flow_sp) / 2
+                if self.args.pred == 'mixEMA':
+                    if self.args.w_ce:
+                        targets_u = (pu_flow_sp + pu_net_sp + pu_flow_ema_sp + pu_net_ema_sp) / 4
+                    else:
+                        targets_u = (pu_flow_ema_sp + pu_flow_sp) / 2
+                elif self.args.pred == 'onlyEMA':
+                    if self.args.w_ce:
+                        targets_u = (pu_flow_ema_sp + pu_net_ema_sp) / 2
+                    else:
+                        targets_u = pu_flow_ema_sp
 
                 targets_u = targets_u.detach()        
 
@@ -179,10 +185,16 @@ class FlowTrainer:
                 px_jsd_dist = js_distance(px_flow, px_flow_ema, self.args.num_class).mean()
                 px_entropy = self.entropy(px_flow_ema).mean()
 
-                if self.args.w_ce:
-                    px = (px_flow + px_net + px_flow_ema + px_net_ema) / 4
-                else:
-                    px = (px_flow_ema + px_flow) / 2
+                if self.args.pred == 'mixEMA':
+                    if self.args.w_ce:
+                        px = (px_flow + px_net + px_flow_ema + px_net_ema) / 4
+                    else:
+                        px = (px_flow_ema + px_flow) / 2
+                elif self.args.pred == 'onlyEMA':
+                    if self.args.w_ce:
+                        px = (px_flow_ema + px_net_ema) / 2
+                    else:
+                        px = px_flow_ema
 
                 px_mix = w_x*labels_x + (1-w_x)*px
 
@@ -316,6 +328,9 @@ class FlowTrainer:
                     logMsg["loss/mse_u"] = Lu.item()
                     logMsg["loss/penalty"] = penalty.item()
 
+                if self.args.centering:
+                    logMsg["centering"] = self.entropy(flownet.center).mean()
+
                 wandb.log(logMsg)
 
             sys.stdout.write('\r')
@@ -327,7 +342,7 @@ class FlowTrainer:
     ## Calculate JSD
     def Calculate_JSD(self, net, flowNet, num_samples, eval_loader):  
         JSD   = torch.zeros(num_samples)    
-        for batch_idx, (inputs, targets, index) in tqdm(enumerate(eval_loader)):
+        for batch_idx, (inputs, targets) in tqdm(enumerate(eval_loader)):
             inputs, targets = inputs.cuda(), targets.cuda()
             batch_size = inputs.size()[0]
 
@@ -360,7 +375,7 @@ class FlowTrainer:
             for c in range(self.args.num_class):
                 input_y[self.args.num_class * b + c, 0, c] = 1.
 
-        for batch_idx, (inputs, targets, index) in tqdm(enumerate(eval_loader)):
+        for batch_idx, (inputs, targets) in tqdm(enumerate(eval_loader)):
 
             # to one hot
             targets = torch.zeros(eval_loader.batch_size, self.args.num_class).scatter_(1, targets.view(-1,1), 1).unsqueeze(1)
@@ -405,7 +420,7 @@ class FlowTrainer:
         # sample_n = self.args.num_class
         sample_n = 100
 
-        for batch_idx, (inputs, targets, index) in tqdm(enumerate(eval_loader)):
+        for batch_idx, (inputs, targets) in tqdm(enumerate(eval_loader)):
             
             # to one hot
             targets = torch.zeros(eval_loader.batch_size, self.args.num_class).scatter_(1, targets.view(-1,1), 1).unsqueeze(1)
@@ -471,7 +486,7 @@ class FlowTrainer:
                 self.update_center(flowNet, approx21)
             return probs_mean
 
-    def testByFlow(self, epoch, net, flownet, test_loader):
+    def testByFlow(self, epoch, net, flownet, test_loader, test_num = -1):
         print("\n====Test====\n")
         net.eval()
         flownet.eval()
@@ -517,6 +532,8 @@ class FlowTrainer:
                     prob_mix, predicted_mix = torch.max(logits_mix, 1)
                     correct_mix += predicted_mix.eq(targets).cpu().sum().item()
                     prob_sum_mix += prob_mix.cpu().sum().item()
+                if test_num > 0 and total >= test_num:
+                    break
                     
 
         acc_flow = 100.*correct_flow/total

@@ -16,9 +16,9 @@ centering: True
 center_momentum: 0.8
 decay: 0.99
 
+pred: 'mixEMA'
 # optimizer: 'AdamW'
 # supcon: True
-
 
 # sharpening: 'DINO'
 # Tu_warmup: 0.03

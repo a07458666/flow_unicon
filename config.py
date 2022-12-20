@@ -69,7 +69,7 @@ def argumentParse(input_args = None):
     parser.add_argument('--supcon', default=False, type=bool, help = 'train with cross entrioy')
     parser.add_argument('--sharpening', default="DINO", type=str, choices=['DINO', 'UNICON'], help = 'sharpening method')
     parser.add_argument('--optimizer', default="SGD", type=str, choices=['AdamW', 'SGD'], help = 'flow optimizer ')
-    
+    parser.add_argument('--pred', default="onlyEMA", type=str, choices=['mixEMA', 'onlyEMA'], help = 'pseudo label')
     
     # load yaml
     _add_args_from_yaml(parser, input_args)
