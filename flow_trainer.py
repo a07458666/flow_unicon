@@ -266,6 +266,7 @@ class FlowTrainer:
             if self.args.split:
                 loss_flow = loss_nll_x + (lamb_u * loss_nll_u)
             else:
+                log_p2[batch_size*2:] *= lamb_u
                 loss_flow = (-log_p2).mean()
 
             ## Total Loss
