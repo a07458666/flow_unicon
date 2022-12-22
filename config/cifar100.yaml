@@ -16,7 +16,7 @@ centering: True
 center_momentum: 0.8
 decay: 0.99
 
-pred: 'mixEMA'
+pred: 'onlyEMA'
 # optimizer: 'AdamW'
 # supcon: True
 
