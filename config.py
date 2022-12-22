@@ -70,6 +70,10 @@ def argumentParse(input_args = None):
     parser.add_argument('--sharpening', default="DINO", type=str, choices=['DINO', 'UNICON'], help = 'sharpening method')
     parser.add_argument('--optimizer', default="SGD", type=str, choices=['AdamW', 'SGD'], help = 'flow optimizer ')
     parser.add_argument('--pred', default="onlyEMA", type=str, choices=['mixEMA', 'onlyEMA'], help = 'pseudo label')
+
+    ## TMA
+    parser.add_argument('--tma_thr', default=0.693, type=float, help='threshold EMA')
+    parser.add_argument('--tma_decay', default=0.0, type=float, help='threshold EMA')
     
     # load yaml
     _add_args_from_yaml(parser, input_args)

@@ -33,12 +33,13 @@ except ImportError:
 # import wandb
 # wandb.init(project="noisy-label-project", entity="..")
 
-def Selection_Rate(args, prob):
+def Selection_Rate(args, prob, pre_threshold):
     threshold = torch.mean(prob)
     if threshold.item() > args.d_u:
             threshold = threshold - (threshold-torch.min(prob))/args.tau
     if threshold.item() < args.d_up:
             threshold = threshold + (torch.max(prob) - threshold)/args.tau
+    threshold = (args.tma_decay) * pre_threshold + (1 - args.tma_decay) * threshold 
     SR = torch.sum(prob<threshold).item()/args.num_samples
     print("threshold : ", torch.mean(prob))
     print("threshold(new) : ", threshold)
@@ -483,7 +484,7 @@ if __name__ == '__main__':
         start_epoch = 0
 
     best_acc = 0
-    # jsd_threshold = args.thr
+    jsd_threshold = args.tma_thr
 
     ## Warmup and SSL-Training 
     for epoch in range(start_epoch,args.num_epochs+1):
@@ -504,7 +505,8 @@ if __name__ == '__main__':
             ## Calculate JSD values and Filter Rate
             print("Calculate JSD")
             prob = flowTrainer.Calculate_JSD(net, flowNet, args.num_samples, eval_loader)
-            SR , threshold = Selection_Rate(args, prob)
+            SR , threshold = Selection_Rate(args, prob, jsd_threshold)
+            jsd_threshold = threshold
             print('Train Net\n')
             if args.useUncertainty:
                 print("Calculate Density")
