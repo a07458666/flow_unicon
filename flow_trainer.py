@@ -214,6 +214,7 @@ class FlowTrainer:
 
                     # Calculate label sources
                     u_sources_pseudo = js_distance(targets_u, labels_u_o, self.args.num_class)
+                    u_sp_sources_pseudo = js_distance(self.sharpening(targets_u, 0.01), labels_u_o, self.args.num_class)
                     x_sources_origin = js_distance(labels_x, labels_x_o, self.args.num_class)
                     x_sources_refine = js_distance(targets_x, labels_x_o, self.args.num_class)
 
@@ -318,7 +319,8 @@ class FlowTrainer:
                 logMsg["feature_grad/max"] = flow_feature.grad.max().item()
                 logMsg["feature_grad/min"] = flow_feature.grad.min().item()
                 
-                if not self.args.isRealTask:
+                if not self.args.isRealTask:           
+                    logMsg["label_quality/unlabel_susp_pseudo_JSD_mean"] = u_sp_sources_pseudo.mean().item()
                     logMsg["label_quality/unlabel_pseudo_JSD_mean"] = u_sources_pseudo.mean().item()
                     logMsg["label_quality/label_origin_JSD_mean"] = x_sources_origin.mean().item()
                     logMsg["label_quality/label_refine_JSD_mena"] = x_sources_refine.mean().item()
