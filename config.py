@@ -28,7 +28,7 @@ def argumentParse(input_args = None):
     parser.add_argument('--alpha', default=4, type=float, help='parameter for Beta')
     parser.add_argument('--linear_u', default=100, type=float, help='weight for unsupervised loss')
     parser.add_argument('--lambda_u', default=30, type=float, help='weight for unsupervised loss')
-    parser.add_argument('--lambda_flow_u', default=3, type=float, help='weight for unsupervised loss')
+    parser.add_argument('--lambda_flow_u', default=1, type=float, help='weight for unsupervised loss')
     parser.add_argument('--lambda_flow_u_warmup', default=1, type=float, help='weight for unsupervised loss start value')
     parser.add_argument('--lambda_p', default=50, type=float, help='sharpening lamb')
     parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
