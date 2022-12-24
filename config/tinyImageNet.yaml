@@ -8,7 +8,7 @@ batch_size: 256
 warm_up: 15
 num_samples: 100000
 lambda_p: 100
-Tu: 0.2
+
 alpha: 0.5
 flow_modules: 256-256-256-256
 weight_decay: 5e-4
@@ -16,5 +16,14 @@ decay: 0.99
 lambda_u: 45
 linear_u: 16
 cond_size: 512
-flow_sp: False
-clip_grad: True
+
+w_ce: False
+centering: True
+
+center_momentum: 0.8
+decay: 0.99
+
+pred: 'onlyEMA'
+sharpening: 'UNICON'
+Tu_warmup: 1.0
+Tu: 0.2

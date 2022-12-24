@@ -445,5 +445,13 @@ class tinyImagenet_dataloader():
                 batch_size=250,
                 shuffle=False,
                 num_workers=self.num_workers)             
-            return val_loader             
+            return val_loader      
+        elif mode=='val_noise':
+            val_noise_dataset = tiny_imagenet_dataset(SR, self.root,transform=self.transforms["warmup"], mode='all', ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file)
+            val_noise_loader = DataLoader(
+                dataset=val_noise_dataset, 
+                batch_size=self.batch_size*2,
+                shuffle=False,
+                num_workers=self.num_workers)  
+            return val_noise_loader       
 ## Save to a file and Create noisy file, both symmetric and asymmetric and instance  

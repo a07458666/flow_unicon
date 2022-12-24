@@ -527,8 +527,6 @@ if __name__ == '__main__':
             acc, confidence = flowTrainer.testByFlow(epoch, net, flowNet, test_loader)
             noise_valloader = loader.run(0, 'val_noise')
             acc_nosie, confidence_noise = flowTrainer.testByFlow(epoch, net, flowNet, noise_valloader, test_num = 5000)
-            clean_valloader = loader.run(0, 'val_clean')
-            acc_clean, confidence_clean = flowTrainer.testByFlow(epoch, net, flowNet, clean_valloader, test_num = 5000)
         
         scheduler.step()
         schedulerFlow.step()
@@ -542,8 +540,6 @@ if __name__ == '__main__':
             logMsg["confidence score"] = confidence
             logMsg["acc/noise_val"] = acc_nosie
             logMsg["confidence score(noise)"] = confidence_noise
-            logMsg["acc/clean_val"] = acc_clean
-            logMsg["confidence score(clean)"] = confidence_clean
             if args.w_ce:
                 logMsg["acc/test(ce_head)"] = acc_ce
                 logMsg["confidence score(test_ce_head)"] = confidence_ce
