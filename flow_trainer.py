@@ -473,11 +473,9 @@ class FlowTrainer:
     def predict(self, flowNet, feature, mean = 0, std = 0, sample_n = 4, centering = False, normalize = True):
         with torch.no_grad():
             batch_size = feature.size()[0]
-            # feature = feature.repeat(1, sample_n, 1)
+            feature = feature.unsqueeze(dim = 1).repeat(1, sample_n, 1)
             input_z = torch.normal(mean = mean, std = std, size=(batch_size, sample_n, self.args.num_class)).cuda()
-
             approx21 = flowNet(input_z, feature, None, reverse=True)
-
             if len(self.args.gpuid) > 1:
                 approx21 = approx21 - flowNet.module.center
             else:
@@ -487,12 +485,11 @@ class FlowTrainer:
                 self.update_center(flowNet, approx21)
 
             probs = torch.mean(approx21, dim=1, keepdim=False)
-
+            
             if normalize:
-                probs = torch.tanh(approx21)
+                probs = torch.tanh(probs)
                 probs = torch.clamp(probs, min=0)
                 probs = F.normalize(probs, dim=1, p=1)
-
             return probs
 
     def testByFlow(self, epoch, net, flownet, test_loader, test_num = -1):
@@ -679,6 +676,10 @@ class FlowTrainer:
         log_p2 = (approx2 - delta_log_p2)
         nll = -log_p2.mean()
         return nll, log_p2
+
+    @torch.no_grad()
+    def distribution_alignment():
+        return
 
     @torch.no_grad()
     def update_center(self, flowNet, teacher_output):
