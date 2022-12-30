@@ -249,3 +249,14 @@ class webvision_dataloader():
                 num_workers=self.num_workers,
                 pin_memory=True)               
             return imagenet_loader     
+
+        
+        elif mode=='val_noise':
+            val_noise_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transforms_train["warmup"], mode="all", num_class=self.num_class)                
+            val_noise_loader = DataLoader(
+                dataset=val_noise_dataset, 
+                batch_size=self.batch_size*2 * 4,
+                shuffle=False,
+                num_workers=self.num_workers,
+                pin_memory=True)  
+            return val_noise_loader    

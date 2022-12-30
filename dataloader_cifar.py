@@ -377,12 +377,4 @@ class cifar_dataloader():
                 shuffle=False,
                 num_workers=0)             
             return trainloader       
-        elif mode=='val_clean':
-            clean_dataset = cifar_dataset(dataset=self.dataset, sample_ratio= sample_ratio, noise_mode=self.noise_mode, r=0, root_dir=self.root_dir, transform=self.transforms["warmup"], mode="all",noise_file=self.noise_file)                
-            cleanloader = DataLoader(
-                dataset=clean_dataset, 
-                batch_size=self.batch_size*2,
-                shuffle=False,
-                num_workers=0)             
-            return cleanloader              
             
