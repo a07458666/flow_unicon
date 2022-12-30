@@ -444,9 +444,8 @@ class FlowTrainer:
                         feature = feature.repeat(sample_n, 1, 1)
                         input_z = torch.normal(mean = mean, std = std, size=(sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
                         # input_z = torch.rand(sample_n * batch_size , self.args.num_class).unsqueeze(1).cuda()
-                        delta_p = torch.zeros(input_z.shape[0], input_z.shape[1], 1).cuda()
 
-                        approx21, _ = flowNet(input_z, feature, delta_p, reverse=True)
+                        approx21 = flowNet(input_z, feature, None, reverse=True)
                         probs = torch.tanh(approx21)
                         # print("probs tanh", probs.size(), probs[:1])
                         probs = torch.clamp(probs, min=0, max=1)
@@ -471,25 +470,30 @@ class FlowTrainer:
         model = model.cuda()
         return model
 
-    def predict(self, flowNet, feature, mean = 0, std = 0, sample_n = 4, centering = False):
+    def predict(self, flowNet, feature, mean = 0, std = 0, sample_n = 4, centering = False, normalize = True):
         with torch.no_grad():
             batch_size = feature.size()[0]
-            feature = feature.repeat(sample_n, 1, 1)
-            input_z = torch.normal(mean = mean, std = std, size=(sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
-            delta_p = torch.zeros(input_z.shape[0], input_z.shape[1], 1).cuda()
+            # feature = feature.repeat(1, sample_n, 1)
+            input_z = torch.normal(mean = mean, std = std, size=(batch_size, sample_n, self.args.num_class)).cuda()
 
-            approx21, _ = flowNet(input_z, feature, delta_p, reverse=True)
-            approx21 = torch.clamp(approx21, min=0)
-            approx21 = approx21 - flowNet.center
+            approx21 = flowNet(input_z, feature, None, reverse=True)
 
-            probs = torch.tanh(approx21)
-            probs = torch.clamp(probs, min=0, max=1)
-            probs = probs.view(sample_n, -1, self.args.num_class)
-            probs_mean = torch.mean(probs, dim=0, keepdim=False)
-            probs_mean = F.normalize(probs_mean, dim=1, p=1)
+            if len(self.args.gpuid) > 1:
+                approx21 = approx21 - flowNet.module.center
+            else:
+                approx21 = approx21 - flowNet.center
+            
             if centering:
                 self.update_center(flowNet, approx21)
-            return probs_mean
+
+            probs = torch.mean(approx21, dim=1, keepdim=False)
+
+            if normalize:
+                probs = torch.tanh(approx21)
+                probs = torch.clamp(probs, min=0)
+                probs = F.normalize(probs, dim=1, p=1)
+
+            return probs
 
     def testByFlow(self, epoch, net, flownet, test_loader, test_num = -1):
         print("\n====Test====\n")
@@ -520,8 +524,10 @@ class FlowTrainer:
                         _, logits_ema, feature_ema = net(inputs, get_feature = True)
                         outputs_ema = self.predict(flownet, feature_ema)
                 
-                logits = (logits + logits_ema) / 2  
-                outputs = (outputs + outputs_ema) / 2
+                # logits = (logits + logits_ema) / 2  
+                # outputs = (outputs + outputs_ema) / 2
+                logits = logits_ema
+                outputs = outputs_ema
                 prob_flow, predicted_flow = torch.max(outputs, 1)
 
                 total += targets.size(0)
@@ -573,7 +579,7 @@ class FlowTrainer:
         _, outputs_u12, features_u12 = net(inputs_u2, get_feature = True)
         
         flow_outputs_u11 = self.predict(flownet, features_u11, std, centering = (self.args.centering and updateCnetering))
-        flow_outputs_u12 = self.predict(flownet, features_u12, std, centering=False)
+        flow_outputs_u12 = self.predict(flownet, features_u12, std, centering = False)
         
         pu_net = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1)) / 2
         pu_flow = (flow_outputs_u11 + flow_outputs_u12) / 2
