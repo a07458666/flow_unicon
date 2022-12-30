@@ -466,7 +466,7 @@ class FlowTrainer:
         return uncertaintys
 
     def create_model(self):
-        model = cnf(self.args.num_class, self.args.flow_modules, self.cond_size, 1).cuda()
+        model = cnf(self.args.num_class, self.args.flow_modules, self.cond_size, 1, tol = self.args.tol).cuda()
         model = model.cuda()
         return model
 

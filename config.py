@@ -46,7 +46,6 @@ def argumentParse(input_args = None):
     parser.add_argument('--num_workers', default=4, type=int)
     parser.add_argument('--data_path', default='./data/cifar10', type=str, help='path to dataset')
     parser.add_argument('--dataset', default='cifar10', type=str)
-    parser.add_argument('--flow_modules', default="8-8-8-8", type=str)
     parser.add_argument('--name', default="", type=str)
     parser.add_argument('--fix', default='none', choices=['none', 'net', 'flow'], type=str)
     parser.add_argument('--pretrain', default='', type=str)
@@ -74,6 +73,11 @@ def argumentParse(input_args = None):
     ## TMA
     parser.add_argument('--tma_thr', default=0.693, type=float, help='threshold EMA')
     parser.add_argument('--tma_decay', default=0.0, type=float, help='threshold EMA')
+
+    # Flow hyperparameters
+    parser.add_argument('--flow_modules', default="8-8-8-8", type=str)
+    parser.add_argument('--tol', default=1e-5, type=float, help='flow atol, rtol')
+    
     
     # load yaml
     _add_args_from_yaml(parser, input_args)

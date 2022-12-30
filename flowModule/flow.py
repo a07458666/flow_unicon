@@ -38,7 +38,7 @@ def count_total_time(model):
     return accumulator.total_time
 
 
-def build_model( input_dim, hidden_dims, context_dim, num_blocks, conditional, context_encode_dim = 0):
+def build_model( input_dim, hidden_dims, context_dim, num_blocks, conditional, context_encode_dim = 0, tol = 1e-5):
     def build_cnf():
         diffeq = ODEnet(
             hidden_dims=hidden_dims,
@@ -58,8 +58,8 @@ def build_model( input_dim, hidden_dims, context_dim, num_blocks, conditional, c
             conditional=conditional,
             solver='dopri8',
             use_adjoint=True,
-            atol=1e-5,
-            rtol=1e-5,
+            atol=tol,
+            rtol=tol,
         )
         return cnf
 
@@ -77,9 +77,9 @@ def build_model( input_dim, hidden_dims, context_dim, num_blocks, conditional, c
     return model
 
 
-def cnf(input_dim,dims,zdim,num_blocks, encode_dims = 0):
+def cnf(input_dim,dims,zdim,num_blocks, encode_dims = 0, tol = 1e-5):
     dims = tuple(map(int, dims.split("-")))
-    model = build_model(input_dim, dims, zdim, num_blocks, True, encode_dims)
+    model = build_model(input_dim, dims, zdim, num_blocks, True, encode_dims, tol)
     print("Number of trainable parameters of Point CNF: {}".format(count_parameters(model)))
     return model
 
