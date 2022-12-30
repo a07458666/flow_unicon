@@ -15,7 +15,7 @@ weight_decay: 5e-4
 decay: 0.99
 lambda_u: 45
 linear_u: 16
-cond_size: 512
+cond_size: 2048
 
 w_ce: False
 centering: True
