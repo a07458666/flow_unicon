@@ -9,10 +9,21 @@ warm_up: 10
 lambda_p: 50
 Tu: 0.5
 alpha: 0.5
-flow_modules: 512-512-512-512
+flow_modules: 256-256-256-256
 cond_size: 512
 isRealTask: True
 num_samples: 65944
 weight_decay: 1e-3
 flow_sp: False
 clip_grad: True
+
+center_momentum: 0.8
+decay: 0.99
+
+pred: 'onlyEMA'
+
+sharpening: 'UNICON'
+Tu_warmup: 1.0
+Tu: 0.7
+
+tma_decay: 0.99
