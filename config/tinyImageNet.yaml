@@ -10,7 +10,7 @@ num_samples: 100000
 lambda_p: 100
 
 alpha: 0.5
-flow_modules: 256-256-256-256
+flow_modules: 160-160-160-160
 weight_decay: 5e-4
 decay: 0.99
 lambda_u: 45
