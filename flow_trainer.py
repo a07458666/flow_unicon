@@ -680,9 +680,8 @@ class FlowTrainer:
             logMsg["epoch"] = epoch
             logMsg["pseudo/acc_flow"] = acc_flow
             logMsg["pseudo/confidence_flow"] = confidence_flow
-            if self.args.w_ce:
-                logMsg["pseudo/acc_net"] = acc_net
-                logMsg["pseudo/confidence_net"] = confidence_net
+            logMsg["pseudo/acc_net"] = acc_net
+            logMsg["pseudo/confidence_net"] = confidence_net
             wandb.log(logMsg)
         return
     

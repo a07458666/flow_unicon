@@ -399,7 +399,7 @@ class tinyImagenet_dataloader():
             warmup_dataset = tiny_imagenet_dataset(SR, self.root,transform=self.transforms["warmup"], mode='all', ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file)
             warmup_loader = DataLoader(
                 dataset=warmup_dataset, 
-                batch_size=self.batch_size*2,
+                batch_size=self.batch_size * 4,
                 shuffle=True,
                 num_workers=self.num_workers)  
             return warmup_loader
@@ -424,7 +424,7 @@ class tinyImagenet_dataloader():
             eval_dataset = tiny_imagenet_dataset(SR, self.root,transform=self.transform_test, mode='all', ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file)
             eval_loader = DataLoader(
                 dataset=eval_dataset, 
-                batch_size=self.batch_size * 8,
+                batch_size=self.batch_size * 4,
                 shuffle=False,
                 num_workers=self.num_workers)          
             return eval_loader        
@@ -433,7 +433,7 @@ class tinyImagenet_dataloader():
             test_dataset = tiny_imagenet_dataset(SR, self.root, transform=self.transform_test, mode='test', ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file)
             test_loader = DataLoader(
                 dataset=test_dataset, 
-                batch_size=self.batch_size * 8,
+                batch_size=self.batch_size * 4,
                 shuffle=False,
                 num_workers=self.num_workers)             
             return test_loader             
@@ -442,7 +442,7 @@ class tinyImagenet_dataloader():
             val_dataset = tiny_imagenet_dataset(SR, self.root,transform=self.transform_test, mode='val', ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file)
             val_loader = DataLoader(
                 dataset=val_dataset, 
-                batch_size=self.batch_size * 8,
+                batch_size=self.batch_size * 4,
                 shuffle=False,
                 num_workers=self.num_workers)             
             return val_loader      
@@ -450,7 +450,7 @@ class tinyImagenet_dataloader():
             val_noise_dataset = tiny_imagenet_dataset(SR, self.root,transform=self.transforms["warmup"], mode='all', ratio = self.ratio, noise_mode = self.noise_mode, noise_file=self.noise_file)
             val_noise_loader = DataLoader(
                 dataset=val_noise_dataset, 
-                batch_size=self.batch_size * 8,
+                batch_size=self.batch_size * 4,
                 shuffle=False,
                 num_workers=self.num_workers)  
             return val_noise_loader       
