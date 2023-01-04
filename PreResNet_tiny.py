@@ -129,7 +129,7 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
         self.linear = nn.Linear(2048, num_classes)
-        self.feature_head = nn.Linear(2048, feature_dim)
+        # self.feature_head = nn.Linear(2048, feature_dim)
         self.projection_head = nn.Linear(2048, feature_dim)
         self.bnl = nn.BatchNorm1d(feature_dim)
 
@@ -162,7 +162,8 @@ class ResNet(nn.Module):
             ssl_out = self.bnl(self.projection_head(out))
             class_out = self.linear(out)
             # feature_out = self.feature_head(out)
-            feature_out = out
+            # feature_out = out
+            feature_out = F.avg_pool1d(out, 4)
 
         if get_feature:
             return F.normalize(ssl_out, dim=1), class_out, F.normalize(feature_out, dim=1)
