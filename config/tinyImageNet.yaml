@@ -15,15 +15,12 @@ weight_decay: 5e-4
 decay: 0.99
 lambda_u: 45
 linear_u: 16
-cond_size: 2048
+cond_size: 512 # 2048/ 4
 
-w_ce: False
 centering: True
-
 center_momentum: 0.8
 decay: 0.99
 
-pred: 'onlyEMA'
 sharpening: 'UNICON'
 Tu_warmup: 1.0
 Tu: 0.5

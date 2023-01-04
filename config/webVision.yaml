@@ -7,10 +7,9 @@ lr_f: 2e-5
 batch_size: 32
 warm_up: 10
 lambda_p: 50
-Tu: 0.5
 alpha: 0.5
 flow_modules: 256-256-256-256
-cond_size: 512
+cond_size: 384  #1536 / 4
 isRealTask: True
 num_samples: 65944
 weight_decay: 1e-3
@@ -20,10 +19,8 @@ clip_grad: True
 center_momentum: 0.8
 decay: 0.99
 
-pred: 'onlyEMA'
-
 sharpening: 'UNICON'
 Tu_warmup: 1.0
 Tu: 0.7
 
-tma_decay: 0.99
+pretrained: True

@@ -10,10 +10,10 @@ num_samples: 50000
 lambda_p: 50
 d_u: 0.5
 weight_decay: 5e-4
-w_ce: False
 centering: True
 center_momentum: 0.8
 decay: 0.99
 sharpening: 'UNICON'
 Tu: 0.5
 Tu_warmup: 1.0
+cond_size: 512
