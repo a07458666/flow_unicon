@@ -37,7 +37,7 @@ class FlowTrainer:
         self.cond_size = args.cond_size
         self.mean = 0
         self.std = 0.2
-        self.sample_n = 1
+        self.sample_n = 50
         self.warm_up = args.warm_up
         self.contrastive_criterion = SupConLoss()
         
@@ -51,6 +51,13 @@ class FlowTrainer:
 
         ## centering
         self.center_momentum = args.center_momentum
+
+        ## DA
+        self.da_weight_ema = (torch.ones(args.num_class) / args.num_class).cuda()
+
+        ## log_file
+        # self.log_file = open('./log.txt','w')
+
         return
 
     ## For Standard Training 
@@ -65,21 +72,26 @@ class FlowTrainer:
         for batch_idx, (inputs, labels) in enumerate(dataloader):
             inputs, labels = inputs.cuda(), labels.cuda() 
             labels_one_hot = torch.nn.functional.one_hot(labels, self.args.num_class).type(torch.cuda.FloatTensor)
+
+            if self.args.warmup_mixup:
+                inputs, labels_one_hot = mix_match(inputs, labels_one_hot, self.args.alpha)    
+
             _, outputs, feature_flow = net(inputs, get_feature = True)
             flow_labels = labels_one_hot.unsqueeze(1).cuda()
-            logFeature(feature_flow)            
-
+            logFeature(feature_flow)      
+  
             # == flow ==
             loss_nll, log_p2 = self.log_prob(flow_labels, feature_flow, flownet)
             # == flow end ===
 
-            if self.args.w_ce:
+            if self.args.lossType == "mix" or self.args.lossType == "ce":
                 loss_ce = self.CEloss(outputs, labels)
+                L = loss_ce
                 if self.args.noise_mode=='asym':     # Penalize confident prediction for asymmetric noise
                     penalty = self.conf_penalty(outputs)
-                    L = loss_ce + penalty + (self.args.lambda_f * loss_nll)
-                else:   
-                    L = loss_ce + (self.args.lambda_f * loss_nll)
+                    L += penalty
+                if self.args.lossType == "mix":
+                    L += (self.args.lambda_f * loss_nll)
             else:
                 L = (self.args.lambda_f * loss_nll)
 
@@ -132,6 +144,11 @@ class FlowTrainer:
             
             batch_size = inputs_x.size(0)
 
+            ## log_file
+            # self.log_file.write("epoch : " + str(epoch)) 
+            # self.log_file.write("batch_idx : " + str(batch_idx)) 
+            # self.log_file.flush()
+
             # Transform label to one-hot
             labels_x_num = labels_x.cuda()
             labels_x = torch.zeros(batch_size, self.args.num_class).scatter_(1, labels_x.view(-1,1), 1)        
@@ -158,21 +175,19 @@ class FlowTrainer:
                 else:
                     pu_flow_ema_sp = pu_flow_ema
                     pu_flow_sp = pu_flow
-
                 pu_jsd_dist = js_distance(pu_flow, pu_flow_ema, self.args.num_class).mean()
                 pu_entropy = self.entropy(pu_flow_ema).mean()
 
                 ## Pseudo-label
-                if self.args.pred == 'mixEMA':
-                    if self.args.w_ce:
-                        targets_u = (pu_flow_sp + pu_net_sp + pu_flow_ema_sp + pu_net_ema_sp) / 4
-                    else:
-                        targets_u = (pu_flow_ema_sp + pu_flow_sp) / 2
-                elif self.args.pred == 'onlyEMA':
-                    if self.args.w_ce:
-                        targets_u = (pu_flow_ema_sp + pu_net_ema_sp) / 2
-                    else:
-                        targets_u = pu_flow_ema_sp
+                if self.args.lossType == "mix":
+                    targets_u = (pu_flow_ema_sp + pu_net_ema_sp) / 2
+                elif self.args.lossType == "ce":
+                    targets_u = pu_net_ema_sp
+                elif self.args.lossType == "nll":
+                    targets_u = pu_flow_ema_sp
+
+                if self.args.distribution_alignment:
+                    targets_u = self.distribution_alignment(targets_u)
 
                 targets_u = targets_u.detach()        
 
@@ -185,21 +200,25 @@ class FlowTrainer:
                 px_jsd_dist = js_distance(px_flow, px_flow_ema, self.args.num_class).mean()
                 px_entropy = self.entropy(px_flow_ema).mean()
 
-                if self.args.pred == 'mixEMA':
-                    if self.args.w_ce:
-                        px = (px_flow + px_net + px_flow_ema + px_net_ema) / 4
-                    else:
-                        px = (px_flow_ema + px_flow) / 2
-                elif self.args.pred == 'onlyEMA':
-                    if self.args.w_ce:
-                        px = (px_flow_ema + px_net_ema) / 2
-                    else:
-                        px = px_flow_ema
+
+                if self.args.lossType == "mix":
+                    px = (px_flow_ema + px_net_ema) / 2
+                elif self.args.lossType == "ce":
+                    px = px_flow_ema
+                elif self.args.lossType == "nll":
+                    px = px_flow_ema
 
                 px_mix = w_x*labels_x + (1-w_x)*px
 
                 targets_x = self.sharpening(px_mix, lamb_Tu)        
                 targets_x = targets_x.detach()
+
+                ## log_file
+                # self.log_file.write("\targets_x : \n") 
+                # self.log_file.write(str(targets_x)) 
+                # self.log_file.write("\ntarget_u : \n") 
+                # self.log_file.write(str(targets_u)) 
+                # self.log_file.flush()
 
                 if not self.args.isRealTask:
                     labels_x_o = labels_x_o.cuda()
@@ -243,9 +262,9 @@ class FlowTrainer:
             reg_f_var_loss = torch.clamp(1-torch.sqrt(flow_feature.var(dim=0) + 1e-10), min=0).mean()
             
             logits_x = logits[:batch_size*2]
-            logits_u = logits[batch_size*2:]        
+            logits_u = logits[batch_size*2:] 
             
-            if self.args.w_ce:
+            if self.args.lossType == "mix" or self.args.lossType == "ce":
                 ## Combined Loss
                 Lx, Lu, lamb = self.criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, self.warm_up, self.args.lambda_u, self.args.linear_u)
                 
@@ -254,7 +273,7 @@ class FlowTrainer:
                 prior = prior.cuda()        
                 pred_mean = torch.softmax(logits, dim=1).mean(0)
                 penalty = torch.sum(prior*torch.log(prior/pred_mean))
-                loss_unicon = Lx + lamb * Lu + penalty
+                loss_ce = Lx + lamb * Lu + penalty
 
             ## Flow loss
             _, log_p2 = self.log_prob(mixed_target.unsqueeze(1).cuda(), flow_feature, flownet)
@@ -263,16 +282,33 @@ class FlowTrainer:
             
             loss_nll_x = -log_p2[:batch_size*2].mean()
             loss_nll_u = -log_p2[batch_size*2:].mean()
+
+            ## log_file
+            # self.log_file.write("\nmixed_target : \n")
+            # self.log_file.write(str(mixed_target))
+            # self.log_file.write("\nloss_x : \n")
+            # self.log_file.write(str(-log_p2[:batch_size*2]))
+            # self.log_file.write("\nloss_u : \n")
+            # self.log_file.write(str(-log_p2[batch_size*2:]))
+            # self.log_file.write("\n")
+            # self.log_file.flush()
+
             if self.args.split:
-                loss_flow = loss_nll_x + (lamb_u * loss_nll_u)
+                loss_nll = loss_nll_x + (lamb_u * loss_nll_u)
             else:
                 log_p2[batch_size*2:] *= lamb_u
-                loss_flow = (-log_p2).mean()
+                loss_nll = (-log_p2).mean()
+
+            loss_flow = self.args.lambda_c * loss_simCLR + (self.args.lambda_f * loss_nll) + reg_f_var_loss
 
             ## Total Loss
-            loss = self.args.lambda_c * loss_simCLR + (self.args.lambda_f * loss_flow) + reg_f_var_loss
-            if self.args.w_ce:
-                loss += loss_unicon
+            if self.args.lossType == "mix":
+                loss = loss_flow + loss_ce
+            elif self.args.lossType == "ce":
+                loss = loss_ce
+            elif self.args.lossType == "nll":
+                loss = loss_flow
+
             if self.args.supcon:
                 loss += self.args.lambda_c * loss_supCon
 
@@ -326,15 +362,20 @@ class FlowTrainer:
                     logMsg["label_quality/label_origin_JSD_mean"] = x_sources_origin.mean().item()
                     logMsg["label_quality/label_refine_JSD_mena"] = x_sources_refine.mean().item()
 
-                if self.args.w_ce:
+                if self.args.lossType == "mix" or self.args.lossType == "ce":
                     logMsg["loss/ce_x"] = Lx.item()
                     logMsg["loss/mse_u"] = Lu.item()
                     logMsg["loss/penalty"] = penalty.item()
 
                 if self.args.centering:
-                    logMsg["centering(max)"] = flownet.center.max().item()
-                    logMsg["centering(min)"] = flownet.center.min().item()
-                    logMsg["centering(min)"] = flownet.center.min().item()
+                    if len(self.args.gpuid) > 1:
+                        logMsg["centering(max)"] = flownet.module.center.max().item()
+                        logMsg["centering(min)"] = flownet.module.center.min().item()
+                        logMsg["centering(min)"] = flownet.module.center.min().item()
+                    else:
+                        logMsg["centering(max)"] = flownet.center.max().item()
+                        logMsg["centering(min)"] = flownet.center.min().item()
+                        logMsg["centering(min)"] = flownet.center.min().item()
 
                 wandb.log(logMsg)
 
@@ -470,7 +511,7 @@ class FlowTrainer:
         model = model.cuda()
         return model
 
-    def predict(self, flowNet, feature, mean = 0, std = 0, sample_n = 4, centering = False, normalize = True):
+    def predict(self, flowNet, feature, mean = 0, std = 0.2, sample_n = 50, centering = False, normalize = True):
         with torch.no_grad():
             batch_size = feature.size()[0]
             feature = feature.unsqueeze(dim = 1).repeat(1, sample_n, 1)
@@ -513,8 +554,8 @@ class FlowTrainer:
             for batch_idx, (inputs, targets) in tqdm(enumerate(test_loader)):
                 inputs, targets = inputs.cuda(), targets.cuda()
 
-                _, logits, feature = net(inputs, get_feature = True)
-                outputs = self.predict(flownet, feature)
+                # _, logits, feature = net(inputs, get_feature = True)
+                # outputs = self.predict(flownet, feature)
 
                 with self.net_ema.average_parameters():
                     with self.flowNet_ema.average_parameters():
@@ -531,15 +572,15 @@ class FlowTrainer:
                 correct_flow += predicted_flow.eq(targets).cpu().sum().item()  
                 prob_sum_flow += prob_flow.cpu().sum().item()
 
-                if self.args.w_ce:
-                    prob_ce, predicted_ce = torch.max(logits, 1)
-                    correct_ce += predicted_ce.eq(targets).cpu().sum().item()  
-                    prob_sum_ce += prob_ce.cpu().sum().item()
+                prob_ce, predicted_ce = torch.max(logits, 1)
+                correct_ce += predicted_ce.eq(targets).cpu().sum().item()  
+                prob_sum_ce += prob_ce.cpu().sum().item()
+                
+                logits_mix = (logits + outputs) / 2
+                prob_mix, predicted_mix = torch.max(logits_mix, 1)
+                correct_mix += predicted_mix.eq(targets).cpu().sum().item()
+                prob_sum_mix += prob_mix.cpu().sum().item()
 
-                    logits_mix = (logits + outputs) / 2
-                    prob_mix, predicted_mix = torch.max(logits_mix, 1)
-                    correct_mix += predicted_mix.eq(targets).cpu().sum().item()
-                    prob_sum_mix += prob_mix.cpu().sum().item()
                 if test_num > 0 and total >= test_num:
                     break
                     
@@ -547,18 +588,23 @@ class FlowTrainer:
         acc_flow = 100.*correct_flow/total
         confidence_flow = prob_sum_flow/total
 
-        print("\n| Test Epoch #%d\t Accuracy: %.2f%%\n" %(epoch, acc_flow))  
-    
-        if self.args.w_ce:
-            acc_ce = 100.*correct_ce/total
-            confidence_ce = prob_sum_ce/total
-            
-            acc_mix = 100.*correct_mix/total
-            confidence_mix = prob_sum_mix/total
+        acc_ce = 100.*correct_ce/total
+        confidence_ce = prob_sum_ce/total
+        
+        acc_mix = 100.*correct_mix/total
+        confidence_mix = prob_sum_mix/total
 
-            return acc_flow, confidence_flow, acc_ce, confidence_ce, acc_mix, confidence_mix
-        else:
-            return acc_flow, confidence_flow
+    
+        if self.args.lossType == "ce":
+            acc, confidence =  acc_ce, confidence_ce
+        elif self.args.lossType == "nll":
+            acc, confidence =  acc_flow, confidence_flow
+        elif self.args.lossType == "mix":
+            acc, confidence =  acc_mix, confidence_mix
+        
+        print("\n| Test Epoch #%d\t Accuracy: %.2f%%\t Condifence: %.2f%%\n" %(epoch, acc, confidence))
+
+        return acc_flow, confidence_flow, acc_ce, confidence_ce, acc_mix, confidence_mix
 
     def torch_onehot(self, y, Nclass):
         if y.is_cuda:
@@ -678,8 +724,28 @@ class FlowTrainer:
         return nll, log_p2
 
     @torch.no_grad()
-    def distribution_alignment():
-        return
+    def distribution_alignment(self, logits, decay = 0.999):
+        batch_size = logits.size(0)
+        num_class = logits.size(1)
+        _, logits_one_hot = logits.max(dim=1)
+
+        p_model = torch.zeros(num_class).cuda()
+        p_target = torch.zeros(num_class).cuda()
+        da_weight = torch.zeros(num_class).cuda()
+        
+        for idx in range(num_class):
+            class_ind = [i for i, x in enumerate(logits_one_hot) if x==idx]
+            
+            p_target[idx] = 1 / num_class
+            p_model[idx] = len(class_ind) / batch_size
+
+        da_weight = (p_target + 1e-6) / (p_model + 1e-6)
+        da_weight = F.normalize(da_weight, dim=0, p=1)
+        self.da_weight_ema = self.da_weight_ema * decay + da_weight * (1 - decay)
+        
+        logits_out = torch.mul(logits, self.da_weight_ema)
+        logits_out = F.normalize(logits_out, dim=1, p=1) # batch, logit
+        return logits_out
 
     @torch.no_grad()
     def update_center(self, flowNet, teacher_output):
@@ -692,4 +758,7 @@ class FlowTrainer:
         # batch_center = batch_center / (len(teacher_output) * dist.get_world_size())
         batch_center = batch_center / (len(teacher_output))
         # ema update
-        flowNet.center = flowNet.center * self.center_momentum + batch_center * (1 - self.center_momentum)
+        if len(self.args.gpuid) > 1:
+            flowNet.module.center = flowNet.module.center * self.center_momentum + batch_center * (1 - self.center_momentum)
+        else:
+            flowNet.center = flowNet.center * self.center_momentum + batch_center * (1 - self.center_momentum)

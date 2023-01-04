@@ -366,7 +366,6 @@ if __name__ == '__main__':
 
     ## GPU Setup
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpuid
-    # torch.cuda.set_device(args.gpuid)
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
@@ -521,15 +520,16 @@ if __name__ == '__main__':
             flowTrainer.train(epoch, net, flowNet, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
 
         
-        if args.w_ce:
-            acc, confidence, acc_ce, confidence_ce, acc_mix, confidence_mix = flowTrainer.testByFlow(epoch, net, flowNet, test_loader)
-        else:
-            acc, confidence = flowTrainer.testByFlow(epoch, net, flowNet, test_loader)
-            noise_valloader = loader.run(0, 'val_noise')
-            acc_nosie, confidence_noise = flowTrainer.testByFlow(epoch, net, flowNet, noise_valloader, test_num = 5000)
+        
+        acc_flow, confidence_flow, acc_ce, confidence_ce, acc_mix, confidence_mix  = flowTrainer.testByFlow(epoch, net, flowNet, test_loader)
+        
+        noise_valloader = loader.run(0, 'val_noise')
+        acc_flow_n, confidence_flow_n, acc_ce_n, confidence_ce_n, acc_mix_n, confidence_mix_n = flowTrainer.testByFlow(epoch, net, flowNet, noise_valloader, test_num = 5000)
         
         scheduler.step()
         schedulerFlow.step()
+
+        acc = max(acc_flow, acc_ce, acc_mix)
 
         ## wandb
         if (wandb != None):
@@ -537,17 +537,16 @@ if __name__ == '__main__':
             logMsg["epoch"] = epoch
             logMsg["runtime"] = time.time() - startTime
             logMsg["acc/test"] = acc
-            logMsg["confidence score"] = confidence
-            logMsg["acc/noise_val"] = acc_nosie
-            logMsg["confidence score(noise)"] = confidence_noise
-            if args.w_ce:
-                logMsg["acc/test(ce_head)"] = acc_ce
-                logMsg["confidence score(test_ce_head)"] = confidence_ce
-                logMsg["acc/test(mix)"] = acc_mix
-                logMsg["confidence score(mix)"] = confidence_mix
+            logMsg["confidence score"] = max(confidence_flow, confidence_ce, confidence_mix)
+            logMsg["acc/noise_val"] = max(acc_flow_n, acc_ce_n, acc_mix_n)
+            logMsg["confidence score(noise)"] =  max(confidence_flow_n, confidence_ce_n, confidence_mix_n)
+            if args.lossType == "ce" or args.lossType == "mix":
+                logMsg["headAcc/ce)"] = acc_ce
+                logMsg["headAcc/nll)"] = acc_flow
+                logMsg["headAcc/mix)"] = acc_mix
             wandb.log(logMsg)
+        
         if acc > best_acc:
-
             save_model(net, flowNet, epoch, acc)
             best_acc = acc
         if acc < best_acc - 10.:

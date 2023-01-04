@@ -276,7 +276,7 @@ class InceptionResNetV2(nn.Module):
         self.avgpool_1a = nn.AvgPool2d(8, count_include_pad=False)
         self.last_linear = nn.Linear(1536, num_classes)
 
-        self.feature_head = nn.Linear(1536, feature_dim)
+        # self.feature_head = nn.Linear(1536, feature_dim)
         self.projection_head = nn.Linear(1536, feature_dim)
         self.bnl = nn.BatchNorm1d(feature_dim)
 
@@ -313,7 +313,7 @@ class InceptionResNetV2(nn.Module):
     def flowFeature(self, features):
         x = self.avgpool_1a(features)
         x = x.view(x.size(0), -1)
-        x = self.feature_head(x)
+        # x = self.feature_head(x)
         return x
 
     def forward(self, input, get_feature = False):

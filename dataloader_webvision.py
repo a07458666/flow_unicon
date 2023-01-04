@@ -193,7 +193,7 @@ class webvision_dataloader():
             all_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transforms_train["warmup"], mode="all", num_class=self.num_class)                
             trainloader = DataLoader(
                 dataset=all_dataset, 
-                batch_size=self.batch_size*2 * 4,
+                batch_size=self.batch_size * 2 * 4,
                 shuffle=True,
                 num_workers=self.num_workers,
                 pin_memory=True)                 
@@ -203,7 +203,8 @@ class webvision_dataloader():
             labeled_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transforms_train["labeled"], mode="labeled",num_class=self.num_class,pred=pred,probability=prob)              
             labeled_trainloader = DataLoader(
                 dataset=labeled_dataset, 
-                batch_size=int(self.batch_size * 2 * sample_ratio),
+                # batch_size=int(self.batch_size * 2 * sample_ratio),
+                batch_size=self.batch_size,
                 shuffle=True,
                 num_workers=self.num_workers,
                 drop_last=True,
@@ -212,7 +213,8 @@ class webvision_dataloader():
             unlabeled_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transforms_train["unlabeled"], mode="unlabeled",num_class=self.num_class,pred=pred)                    
             unlabeled_trainloader = DataLoader(
                 dataset=unlabeled_dataset, 
-                batch_size=int(self.batch_size * 2 * (1- sample_ratio)),
+                # batch_size=int(self.batch_size * 2 * (1- sample_ratio)),
+                batch_size=self.batch_size,
                 shuffle=True,
                 num_workers=self.num_workers,
                 drop_last=True,
@@ -255,7 +257,7 @@ class webvision_dataloader():
             val_noise_dataset = webvision_dataset(sample_ratio = sample_ratio, root_dir=self.root_dir, transform=self.transforms_train["warmup"], mode="all", num_class=self.num_class)                
             val_noise_loader = DataLoader(
                 dataset=val_noise_dataset, 
-                batch_size=self.batch_size*2 * 4,
+                batch_size=self.batch_size * 2 * 4,
                 shuffle=False,
                 num_workers=self.num_workers,
                 pin_memory=True)  

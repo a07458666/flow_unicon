@@ -64,11 +64,11 @@ def argumentParse(input_args = None):
     parser.add_argument('--flow_sp', default=True, type=bool, help='flow sharpening')
     parser.add_argument('--centering', default=True, type=bool, help='use centering')
     parser.add_argument('--center_momentum', default=0.9, type=float, help='use centering')
-    parser.add_argument('--w_ce', default=False, type=bool, help = 'train with cross entrioy')
+    parser.add_argument('--lossType', default='nll', type=str, choices=['nll', 'ce', 'mix'], help = 'useing nll, ce or nll + ce loss')
     parser.add_argument('--supcon', default=False, type=bool, help = 'train with cross entrioy')
     parser.add_argument('--sharpening', default="DINO", type=str, choices=['DINO', 'UNICON'], help = 'sharpening method')
     parser.add_argument('--optimizer', default="SGD", type=str, choices=['AdamW', 'SGD'], help = 'flow optimizer ')
-    parser.add_argument('--pred', default="onlyEMA", type=str, choices=['mixEMA', 'onlyEMA'], help = 'pseudo label')
+    parser.add_argument('--warmup_mixup', default=False, type=bool, help = 'warmup use mixup')
 
     ## TMA
     parser.add_argument('--tma_thr', default=0.693, type=float, help='threshold EMA')
@@ -77,7 +77,9 @@ def argumentParse(input_args = None):
     # Flow hyperparameters
     parser.add_argument('--flow_modules', default="8-8-8-8", type=str)
     parser.add_argument('--tol', default=1e-5, type=float, help='flow atol, rtol')
-    
+
+    # distribution_alignment
+    parser.add_argument('--distribution_alignment', default=False, type=bool, help='use distribution alignment')
     
     # load yaml
     _add_args_from_yaml(parser, input_args)
