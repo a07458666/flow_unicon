@@ -4,7 +4,7 @@ num_epochs: 200
 num_class: 200
 lr: 4e-2
 lr_f: 4e-5
-batch_size: 64
+batch_size: 256
 warm_up: 15
 num_samples: 100000
 lambda_p: 100

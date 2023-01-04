@@ -35,9 +35,6 @@ class FlowTrainer:
     def __init__(self, args) -> None:
         self.args = args
         self.cond_size = args.cond_size
-        self.mean = 0
-        self.std = 0.2
-        self.sample_n = 50
         self.warm_up = args.warm_up
         self.contrastive_criterion = SupConLoss()
         
@@ -498,8 +495,6 @@ class FlowTrainer:
                         # print("probs", probs.size())
                         entropy_val = self.entropy(probs_mean)
                         # print("entropy_val", entropy_val.size())
-                        
-                        
                         # print("probs_mean", probs_mean.size())
 
             ## Get the Prediction
@@ -514,7 +509,6 @@ class FlowTrainer:
     def predict(self, flowNet, feature, mean = 0, std = 0.2, sample_n = 50, centering = False, normalize = True):
         with torch.no_grad():
             batch_size = feature.size()[0]
-            feature = feature.unsqueeze(dim = 1).repeat(1, sample_n, 1)
             input_z = torch.normal(mean = mean, std = std, size=(batch_size, sample_n, self.args.num_class)).cuda()
             approx21 = flowNet(input_z, feature, None, reverse=True)
             if len(self.args.gpuid) > 1:
