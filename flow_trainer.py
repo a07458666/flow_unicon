@@ -160,7 +160,7 @@ class FlowTrainer:
                 # Label co-guessing of unlabeled samples   
                 with self.net_ema.average_parameters():
                     with self.flowNet_ema.average_parameters():
-                        pu_net_ema, pu_flow_ema = self.get_pseudo_label(net, flownet, inputs_u, inputs_u2, std = self.args.pseudo_std, updateCnetering = True)        
+                        pu_net_ema, pu_flow_ema = self.get_pseudo_label(net, flownet, inputs_u, inputs_u2, std = self.args.pseudo_std, updateCnetering = False)        
                 pu_net, pu_flow = self.get_pseudo_label(net, flownet, inputs_u, inputs_u2, std = self.args.pseudo_std)
                 
                 pu_net_sp = self.sharpening(pu_net, lamb_Tu)
@@ -210,12 +210,11 @@ class FlowTrainer:
                 targets_x = self.sharpening(px_mix, lamb_Tu)        
                 targets_x = targets_x.detach()
 
-                ## log_file
-                # self.log_file.write("\targets_x : \n") 
-                # self.log_file.write(str(targets_x)) 
-                # self.log_file.write("\ntarget_u : \n") 
-                # self.log_file.write(str(targets_u)) 
-                # self.log_file.flush()
+
+                ## updateCnetering
+                with self.net_ema.average_parameters():
+                    with self.flowNet_ema.average_parameters():
+                        _, _ = self.get_pseudo_label(net, flownet, inputs_u, inputs_u2, std = self.args.pseudo_std, updateCnetering = True)        
 
                 if not self.args.isRealTask:
                     labels_x_o = labels_x_o.cuda()
@@ -512,14 +511,15 @@ class FlowTrainer:
             input_z = torch.normal(mean = mean, std = std, size=(batch_size, sample_n, self.args.num_class)).cuda()
             approx21 = flowNet(input_z, feature, None, reverse=True)
             if len(self.args.gpuid) > 1:
-                approx21 = approx21 - flowNet.module.center
+                approx21_center = approx21 - flowNet.module.center
             else:
-                approx21 = approx21 - flowNet.center
+                approx21_center = approx21 - flowNet.center
             
             if centering:
+                # approx21_center += (1 / self.args.num_class)
                 self.update_center(flowNet, approx21)
 
-            probs = torch.mean(approx21, dim=1, keepdim=False)
+            probs = torch.mean(approx21_center, dim=1, keepdim=False)
             
             if normalize:
                 probs = torch.tanh(probs)
