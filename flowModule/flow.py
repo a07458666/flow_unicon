@@ -56,7 +56,7 @@ def build_model( input_dim, hidden_dims, context_dim, num_blocks, conditional, c
             T=1.0,
             train_T=True,
             conditional=conditional,
-            solver='dopri8',
+            solver='dopri5',
             use_adjoint=True,
             atol=tol,
             rtol=tol,
