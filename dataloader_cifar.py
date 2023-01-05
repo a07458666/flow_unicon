@@ -357,7 +357,7 @@ class cifar_dataloader():
             eval_dataset = cifar_dataset(dataset=self.dataset, sample_ratio= sample_ratio, noise_mode=self.noise_mode, r=self.r, root_dir=self.root_dir, transform=self.transform_test, mode='all', noise_file=self.noise_file)      
             eval_loader = DataLoader(
                 dataset=eval_dataset, 
-                batch_size=100,
+                batch_size=500,
                 shuffle=False,
                 num_workers=self.num_workers, drop_last= True)          
             return eval_loader   

@@ -10,21 +10,11 @@ num_samples: 50000
 flow_modules: 64-64-64-64
 weight_decay: 5e-4
 w_ce: False
-centering: True
+centering: False
 cond_size: 512
 center_momentum: 0.8
 decay: 0.99
 
-pred: 'onlyEMA'
-# optimizer: 'AdamW'
-# supcon: True
-
-# sharpening: 'DINO'
-# Tu_warmup: 0.03
-# Tu: 0.04
-
-
-
 sharpening: 'UNICON'
-Tu_warmup: 1.0
-Tu: 0.7
+Tu_warmup: 0.5
+Tu: 0.5

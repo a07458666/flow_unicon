@@ -49,7 +49,7 @@ def argumentParse(input_args = None):
     parser.add_argument('--name', default="", type=str)
     parser.add_argument('--fix', default='none', choices=['none', 'net', 'flow'], type=str)
     parser.add_argument('--pretrain', default='', type=str)
-    parser.add_argument('--pseudo_std', default=0, type=float)
+    parser.add_argument('--pseudo_std', default=0.2, type=float)
     parser.add_argument('--decay', default=0.9, type=float, help='Exponential Moving Average decay')
     parser.add_argument('--warm_up', default=10, type=int)
     parser.add_argument('--num_samples', default=50000, type=int)
@@ -58,28 +58,19 @@ def argumentParse(input_args = None):
     parser.add_argument('--split', action='store_true', help = 'split flow loss to x, u')
     parser.add_argument('--cond_size', default=128, type=int)
     parser.add_argument('--isRealTask', default=False, type=bool, help='')
-    parser.add_argument('--useUncertainty', default=False, type=bool, help='')
     parser.add_argument('--lambda_f', default=1.0, type=float, help='flow nll loss weight')
     parser.add_argument('--weight_decay', default=5e-4, type=float, help='SGD weight decay')
     parser.add_argument('--flow_sp', default=True, type=bool, help='flow sharpening')
-    parser.add_argument('--centering', default=True, type=bool, help='use centering')
+    parser.add_argument('--centering', default=False, type=bool, help='use centering')
     parser.add_argument('--center_momentum', default=0.9, type=float, help='use centering')
     parser.add_argument('--lossType', default='nll', type=str, choices=['nll', 'ce', 'mix'], help = 'useing nll, ce or nll + ce loss')
-    parser.add_argument('--supcon', default=False, type=bool, help = 'train with cross entrioy')
-    parser.add_argument('--sharpening', default="DINO", type=str, choices=['DINO', 'UNICON'], help = 'sharpening method')
+    parser.add_argument('--sharpening', default="UNICON", type=str, choices=['DINO', 'UNICON'], help = 'sharpening method')
     parser.add_argument('--optimizer', default="SGD", type=str, choices=['AdamW', 'SGD'], help = 'flow optimizer ')
     parser.add_argument('--warmup_mixup', default=False, type=bool, help = 'warmup use mixup')
-
-    ## TMA
-    parser.add_argument('--tma_thr', default=0.693, type=float, help='threshold EMA')
-    parser.add_argument('--tma_decay', default=0.0, type=float, help='threshold EMA')
 
     # Flow hyperparameters
     parser.add_argument('--flow_modules', default="8-8-8-8", type=str)
     parser.add_argument('--tol', default=1e-5, type=float, help='flow atol, rtol')
-
-    # distribution_alignment
-    parser.add_argument('--distribution_alignment', default=False, type=bool, help='use distribution alignment')
     
     # load yaml
     _add_args_from_yaml(parser, input_args)

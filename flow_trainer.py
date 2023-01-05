@@ -58,8 +58,8 @@ class FlowTrainer:
         return
 
     ## For Standard Training 
-    def warmup_standard(self, epoch, net, flownet, optimizer, optimizerFlow, dataloader):
-        flownet.train()
+    def warmup_standard(self, epoch, net, flowNet, optimizer, optimizerFlow, dataloader):
+        flowNet.train()
         if self.args.fix == 'net':
             net.eval()
         else:    
@@ -78,7 +78,7 @@ class FlowTrainer:
             logFeature(feature_flow)      
   
             # == flow ==
-            loss_nll, log_p2 = self.log_prob(flow_labels, feature_flow, flownet)
+            loss_nll, log_p2 = self.log_prob(flow_labels, feature_flow, flowNet)
             # == flow end ===
 
             if self.args.lossType == "mix" or self.args.lossType == "ce":
@@ -103,9 +103,6 @@ class FlowTrainer:
                 optimizer.step()
                 optimizerFlow.step()  
             
-            self.net_ema.update()
-            self.flowNet_ema.update()
-
             ## wandb
             if (wandb != None):
                 logMsg = {}
@@ -125,9 +122,11 @@ class FlowTrainer:
                         %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
             sys.stdout.flush()
 
-    def train(self, epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader):
-        net.train()
-        flownet.train()
+    def train(self, epoch, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader):
+        net1.train()
+        flowNet1.train()
+        net2.eval()
+        flowNet2.eval()
 
         unlabeled_train_iter = iter(unlabeled_trainloader)
         num_iter = (len(labeled_trainloader.dataset)//labeled_trainloader.batch_size)+1 
@@ -141,11 +140,6 @@ class FlowTrainer:
             
             batch_size = inputs_x.size(0)
 
-            ## log_file
-            # self.log_file.write("epoch : " + str(epoch)) 
-            # self.log_file.write("batch_idx : " + str(batch_idx)) 
-            # self.log_file.flush()
-
             # Transform label to one-hot
             labels_x_num = labels_x.cuda()
             labels_x = torch.zeros(batch_size, self.args.num_class).scatter_(1, labels_x.view(-1,1), 1)        
@@ -157,103 +151,55 @@ class FlowTrainer:
             lamb_Tu = linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.lambda_p, self.args.Tu_warmup, self.args.Tu)
 
             with torch.no_grad():
-                # Label co-guessing of unlabeled samples   
-                with self.net_ema.average_parameters():
-                    with self.flowNet_ema.average_parameters():
-                        pu_net_ema, pu_flow_ema = self.get_pseudo_label(net, flownet, inputs_u, inputs_u2, std = self.args.pseudo_std, updateCnetering = True)        
-                pu_net, pu_flow = self.get_pseudo_label(net, flownet, inputs_u, inputs_u2, std = self.args.pseudo_std)
+                # Label co-guessing of unlabeled samples        
+                pu_net_1, pu_flow_1 = self.get_pseudo_label(net1, flowNet1, inputs_u, inputs_u2, std = self.args.pseudo_std)
+                pu_net_2, pu_flow_2 = self.get_pseudo_label(net2, flowNet2, inputs_u, inputs_u2, std = self.args.pseudo_std)
                 
-                pu_net_sp = self.sharpening(pu_net, lamb_Tu)
-                pu_net_ema_sp = self.sharpening(pu_net_ema, lamb_Tu)
+                pu_net_sp_1 = self.sharpening(pu_net_1, lamb_Tu)
+                pu_net_sp_2 = self.sharpening(pu_net_2, lamb_Tu)
                 
                 if self.args.flow_sp:
-                    pu_flow_ema_sp = self.sharpening(pu_flow_ema, lamb_Tu)
-                    pu_flow_sp = self.sharpening(pu_flow, lamb_Tu)
-                else:
-                    pu_flow_ema_sp = pu_flow_ema
-                    pu_flow_sp = pu_flow
-                pu_jsd_dist = js_distance(pu_flow, pu_flow_ema, self.args.num_class).mean()
-                pu_entropy = self.entropy(pu_flow_ema).mean()
+                    pu_flow_1 = self.sharpening(pu_flow_1, lamb_Tu)
+                    pu_flow_2 = self.sharpening(pu_flow_2, lamb_Tu)
 
                 ## Pseudo-label
-                if self.args.lossType == "mix":
-                    targets_u = (pu_flow_ema_sp + pu_net_ema_sp) / 2
-                elif self.args.lossType == "ce":
-                    targets_u = pu_net_ema_sp
-                elif self.args.lossType == "nll":
-                    targets_u = pu_flow_ema_sp
-
-                if self.args.distribution_alignment:
-                    targets_u = self.distribution_alignment(targets_u)
-
+                targets_u = (pu_flow_1 + pu_flow_2) / 2
                 targets_u = targets_u.detach()        
 
                 ## Label refinement
-                with self.net_ema.average_parameters():
-                    with self.flowNet_ema.average_parameters():
-                        px_net_ema, px_flow_ema = self.get_pseudo_label(net, flownet, inputs_x, inputs_x2, std = self.args.pseudo_std)
+                px_net_1, px_flow_1 = self.get_pseudo_label(net1, flowNet1, inputs_x, inputs_x, std = self.args.pseudo_std)
+                px_net_2, px_flow_2 = self.get_pseudo_label(net2, flowNet2, inputs_x2, inputs_x2, std = self.args.pseudo_std)
 
-                px_net, px_flow = self.get_pseudo_label(net, flownet, inputs_x, inputs_x2, std = self.args.pseudo_std)
-                px_jsd_dist = js_distance(px_flow, px_flow_ema, self.args.num_class).mean()
-                px_entropy = self.entropy(px_flow_ema).mean()
-
-
-                if self.args.lossType == "mix":
-                    px = (px_flow_ema + px_net_ema) / 2
-                elif self.args.lossType == "ce":
-                    px = px_flow_ema
-                elif self.args.lossType == "nll":
-                    px = px_flow_ema
+                px = (px_flow_1 + px_flow_2) / 2
 
                 px_mix = w_x*labels_x + (1-w_x)*px
 
                 targets_x = self.sharpening(px_mix, lamb_Tu)        
                 targets_x = targets_x.detach()
 
-                ## log_file
-                # self.log_file.write("\targets_x : \n") 
-                # self.log_file.write(str(targets_x)) 
-                # self.log_file.write("\ntarget_u : \n") 
-                # self.log_file.write(str(targets_u)) 
-                # self.log_file.flush()
-
                 if not self.args.isRealTask:
                     labels_x_o = labels_x_o.cuda()
                     labels_u_o = labels_u_o.cuda()
-
-                    # self.log_pu((pu_flow_sp + pu_flow_ema_sp) / 2, (pu_net_sp + pu_net_ema_sp) / 2, labels_u_o, epoch)
-                    self.log_pu(pu_flow_ema_sp, pu_net_ema_sp, labels_u_o, epoch)
                     
                     self.print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, epoch)
 
-                    # logFeature(torch.cat([features_u11_flow, features_u12_flow, features_x_flow, features_x2_flow], dim=0))
-
                     # Calculate label sources
                     u_sources_pseudo = js_distance(targets_u, labels_u_o, self.args.num_class)
-                    u_sp_sources_pseudo = js_distance(self.sharpening(targets_u, 0.01), labels_u_o, self.args.num_class)
                     x_sources_origin = js_distance(labels_x, labels_x_o, self.args.num_class)
                     x_sources_refine = js_distance(targets_x, labels_x_o, self.args.num_class)
 
-            ## Supervised Contrastive Loss
-            if self.args.supcon:
-                fx_1, _ = net(inputs_x3)
-                fx_2, _ = net(inputs_x4)
-                features_x = torch.cat([fx_1.unsqueeze(1), fx_2.unsqueeze(1)], dim=1)
-                loss_supCon = self.contrastive_criterion(features_x, labels_x_num)
-
             ## Unsupervised Contrastive Loss
-            f1, _ = net(inputs_u3)
-            f2, _ = net(inputs_u4)
+            f1, _ = net1(inputs_u3)
+            f2, _ = net1(inputs_u4)
             features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
             loss_simCLR = self.contrastive_criterion(features)
-
 
             all_inputs  = torch.cat([inputs_x3, inputs_x4, inputs_u3, inputs_u4], dim=0)
             all_targets = torch.cat([targets_x, targets_x, targets_u, targets_u], dim=0)
 
             mixed_input, mixed_target = mix_match(all_inputs, all_targets, self.args.alpha)
                     
-            _, logits, flow_feature = net(mixed_input, get_feature = True) # add flow_feature
+            _, logits, flow_feature = net1(mixed_input, get_feature = True) # add flow_feature
 
             # Regularization feature var
             reg_f_var_loss = torch.clamp(1-torch.sqrt(flow_feature.var(dim=0) + 1e-10), min=0).mean()
@@ -273,22 +219,12 @@ class FlowTrainer:
                 loss_ce = Lx + lamb * Lu + penalty
 
             ## Flow loss
-            _, log_p2 = self.log_prob(mixed_target.unsqueeze(1).cuda(), flow_feature, flownet)
+            _, log_p2 = self.log_prob(mixed_target.unsqueeze(1).cuda(), flow_feature, flowNet1)
 
             lamb_u = linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.linear_u, self.args.lambda_flow_u_warmup, self.args.lambda_flow_u)
             
             loss_nll_x = -log_p2[:batch_size*2].mean()
             loss_nll_u = -log_p2[batch_size*2:].mean()
-
-            ## log_file
-            # self.log_file.write("\nmixed_target : \n")
-            # self.log_file.write(str(mixed_target))
-            # self.log_file.write("\nloss_x : \n")
-            # self.log_file.write(str(-log_p2[:batch_size*2]))
-            # self.log_file.write("\nloss_u : \n")
-            # self.log_file.write(str(-log_p2[batch_size*2:]))
-            # self.log_file.write("\n")
-            # self.log_file.flush()
 
             if self.args.split:
                 loss_nll = loss_nll_x + (lamb_u * loss_nll_u)
@@ -306,9 +242,6 @@ class FlowTrainer:
             elif self.args.lossType == "nll":
                 loss = loss_flow
 
-            if self.args.supcon:
-                loss += self.args.lambda_c * loss_supCon
-
             # Compute gradient and Do SGD step
             optimizer.zero_grad()
             optimizerFlow.zero_grad()
@@ -321,9 +254,6 @@ class FlowTrainer:
             else:
                 optimizer.step()
                 optimizerFlow.step()  
-
-            self.net_ema.update()
-            self.flowNet_ema.update()
 
             ## wandb
             if (wandb != None):
@@ -344,17 +274,11 @@ class FlowTrainer:
                 logMsg["loss/simCLR"] = loss_simCLR.item()
                 logMsg["loss/reg_f_var_loss"] = reg_f_var_loss.item()
 
-                logMsg["collapse/px_jsd_dist"] = px_jsd_dist.item()
-                logMsg["collapse/pu_jsd_dist"] = pu_jsd_dist.item()
-                logMsg["entropy/px_entropy"] = px_entropy.item()
-                logMsg["entropy/pu_entropy"] = pu_entropy.item()
-
                 logMsg["feature_grad/mean"] = flow_feature.grad.mean().item()
                 logMsg["feature_grad/max"] = flow_feature.grad.max().item()
                 logMsg["feature_grad/min"] = flow_feature.grad.min().item()
                 
                 if not self.args.isRealTask:           
-                    logMsg["label_quality/unlabel_susp_pseudo_JSD_mean"] = u_sp_sources_pseudo.mean().item()
                     logMsg["label_quality/unlabel_pseudo_JSD_mean"] = u_sources_pseudo.mean().item()
                     logMsg["label_quality/label_origin_JSD_mean"] = x_sources_origin.mean().item()
                     logMsg["label_quality/label_refine_JSD_mena"] = x_sources_refine.mean().item()
@@ -366,13 +290,13 @@ class FlowTrainer:
 
                 if self.args.centering:
                     if len(self.args.gpuid) > 1:
-                        logMsg["centering(max)"] = flownet.module.center.max().item()
-                        logMsg["centering(min)"] = flownet.module.center.min().item()
-                        logMsg["centering(min)"] = flownet.module.center.min().item()
+                        logMsg["centering(max)"] = flowNet1.module.center.max().item()
+                        logMsg["centering(min)"] = flowNet1.module.center.min().item()
+                        logMsg["centering(min)"] = flowNet1.module.center.min().item()
                     else:
-                        logMsg["centering(max)"] = flownet.center.max().item()
-                        logMsg["centering(min)"] = flownet.center.min().item()
-                        logMsg["centering(min)"] = flownet.center.min().item()
+                        logMsg["centering(max)"] = flowNet1.center.max().item()
+                        logMsg["centering(min)"] = flowNet1.center.min().item()
+                        logMsg["centering(min)"] = flowNet1.center.min().item()
 
                 wandb.log(logMsg)
 
@@ -383,7 +307,7 @@ class FlowTrainer:
         
 
     ## Calculate JSD
-    def Calculate_JSD(self, net, flowNet, num_samples, eval_loader):  
+    def Calculate_JSD(self, net1, flowNet1, net2, flowNet2, num_samples, eval_loader):  
         JSD   = torch.zeros(num_samples)    
         for batch_idx, (inputs, targets) in tqdm(enumerate(eval_loader)):
             inputs, targets = inputs.cuda(), targets.cuda()
@@ -391,13 +315,11 @@ class FlowTrainer:
 
             ## Get outputs of both network
             with torch.no_grad():
-                _, _, feature = net(inputs, get_feature=True)
-                out1 = self.predict(flowNet, feature)
+                _, _, feature = net1(inputs, get_feature=True)
+                out1 = self.predict(flowNet1, feature)
 
-                with self.net_ema.average_parameters():
-                    with self.flowNet_ema .average_parameters():
-                        _, _, feature2 = net(inputs, get_feature=True)
-                        out2 = self.predict(flowNet, feature2)
+                _, _, feature2 = net2(inputs, get_feature=True)
+                out2 = self.predict(flowNet2, feature2)
 
             ## Get the Prediction
             out = (out1 + out2) / 2
@@ -405,101 +327,6 @@ class FlowTrainer:
             dist = js_distance(out, targets, self.args.num_class)
             JSD[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = dist
         return JSD
-
-    ## Calculate Density
-    def Calculate_Density(self, net, flowNet, num_samples, eval_loader):  
-        densitys   = torch.zeros(num_samples)  
-        input_y = torch.zeros(size=(eval_loader.batch_size * self.args.num_class, 1, self.args.num_class)).cuda()
-        
-        # sample_n = self.args.num_class
-        sample_n = 1
-
-        for b in range(eval_loader.batch_size):
-            for c in range(self.args.num_class):
-                input_y[self.args.num_class * b + c, 0, c] = 1.
-
-        for batch_idx, (inputs, targets) in tqdm(enumerate(eval_loader)):
-
-            # to one hot
-            targets = torch.zeros(eval_loader.batch_size, self.args.num_class).scatter_(1, targets.view(-1,1), 1).unsqueeze(1)
-
-            inputs, targets = inputs.cuda(), targets.cuda()
-            batch_size = inputs.size()[0]
-
-            ## Get outputs of both network
-            with torch.no_grad():
-                _, _, feature = net(inputs, get_feature=True)
-                feature = feature.repeat(sample_n, 1, 1)
-                # print("input_y", input_y.size())
-                # print("feature", feature.size())
-                
-                _, log_p2 = self.log_prob(targets, feature, flowNet)
-                
-                density1 = log_p2.view(sample_n, batch_size)
-                
-                density1_mean = torch.mean(density1, dim=0, keepdim=False)
-            
-
-                with self.net_ema.average_parameters():
-                    with self.flowNet_ema .average_parameters():
-                        _, _, feature = net(inputs, get_feature=True)
-                        feature = feature.repeat(sample_n, 1, 1)
-                        _, log_p2 = self.log_prob(targets, feature, flowNet)
-                        density2 = log_p2.view(sample_n, batch_size)
-                        density2_mean = torch.mean(density2, dim=0, keepdim=False)
-                        
-
-            ## Get the Prediction
-            density = (density1_mean + density2_mean) / 2
-            # print("d size :", density.size())
-            densitys[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = density
-        return densitys
-
-    ## Calculate Uncertainty
-    def Calculate_Uncertainty(self, net, flowNet, num_samples, eval_loader):  
-        print("Calculate_Uncertainty Rand")
-        uncertaintys   = torch.zeros(num_samples)  
-        
-        # sample_n = self.args.num_class
-        sample_n = 100
-
-        for batch_idx, (inputs, targets) in tqdm(enumerate(eval_loader)):
-            
-            # to one hot
-            targets = torch.zeros(eval_loader.batch_size, self.args.num_class).scatter_(1, targets.view(-1,1), 1).unsqueeze(1)
-
-            inputs, targets = inputs.cuda(), targets.cuda()
-            batch_size = inputs.size()[0]
-
-            ## Get outputs of both network
-            mean = 0
-            std = 1
-            with torch.no_grad():
-                with self.net_ema.average_parameters():
-                    with self.flowNet_ema .average_parameters():
-                        _, logits, feature = net(inputs, get_feature = True)
-                        batch_size = feature.size()[0]
-                        feature = feature.repeat(sample_n, 1, 1)
-                        input_z = torch.normal(mean = mean, std = std, size=(sample_n * batch_size , self.args.num_class)).unsqueeze(1).cuda()
-                        # input_z = torch.rand(sample_n * batch_size , self.args.num_class).unsqueeze(1).cuda()
-
-                        approx21 = flowNet(input_z, feature, None, reverse=True)
-                        probs = torch.tanh(approx21)
-                        # print("probs tanh", probs.size(), probs[:1])
-                        probs = torch.clamp(probs, min=0, max=1)
-                        # print("probs clamp", probs.size(), probs[:1])
-                        probs = F.normalize(probs, dim=2, p=1)
-                        # print("probs norm", probs.size(), probs[:1])
-                        probs = probs.view(sample_n, batch_size, self.args.num_class)
-                        probs_mean = torch.mean(probs, dim=0, keepdim=False)
-                        # print("probs", probs.size())
-                        entropy_val = self.entropy(probs_mean)
-                        # print("entropy_val", entropy_val.size())
-                        # print("probs_mean", probs_mean.size())
-
-            ## Get the Prediction
-            uncertaintys[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = entropy_val
-        return uncertaintys
 
     def create_model(self):
         model = cnf(self.args.num_class, self.args.flow_modules, self.cond_size, 1, tol = self.args.tol).cuda()
@@ -527,18 +354,24 @@ class FlowTrainer:
                 probs = F.normalize(probs, dim=1, p=1)
             return probs
 
-    def testByFlow(self, epoch, net, flownet, test_loader, test_num = -1):
+    def testByFlow(self, epoch, net1, flowNet1, net2, flowNet2, test_loader, test_num = -1):
         print("\n====Test====\n")
-        net.eval()
-        flownet.eval()
+        net1.eval()
+        flowNet1.eval()
+        net2.eval()
+        flowNet2.eval()
         total = 0
         # flow acc
-        correct_flow = 0
-        prob_sum_flow = 0
+        correct_flow1 = 0
+        prob_sum_flow1 = 0
+
+        # flow acc
+        correct_flow2 = 0
+        prob_sum_flow2 = 0
 
         # cross entropy acc
-        correct_ce = 0
-        prob_sum_ce = 0
+        # correct_ce = 0
+        # prob_sum_ce = 0
 
         # mix acc
         correct_mix = 0
@@ -548,30 +381,36 @@ class FlowTrainer:
             for batch_idx, (inputs, targets) in tqdm(enumerate(test_loader)):
                 inputs, targets = inputs.cuda(), targets.cuda()
 
-                # _, logits, feature = net(inputs, get_feature = True)
-                # outputs = self.predict(flownet, feature)
+                _, logits1, feature1 = net1(inputs, get_feature = True)
+                outputs1 = self.predict(flowNet1, feature1)
 
-                with self.net_ema.average_parameters():
-                    with self.flowNet_ema.average_parameters():
-                        _, logits_ema, feature_ema = net(inputs, get_feature = True)
-                        outputs_ema = self.predict(flownet, feature_ema)
+                _, logits2, feature2 = net2(inputs, get_feature = True)
+                outputs2 = self.predict(flowNet2, feature2)
+
+                # with self.net_ema.average_parameters():
+                #     with self.flowNet_ema.average_parameters():
+                #         _, logits_ema, feature_ema = net(inputs, get_feature = True)
+                #         outputs_ema = self.predict(flowNet, feature_ema)
                 
-                # logits = (logits + logits_ema) / 2  
-                # outputs = (outputs + outputs_ema) / 2
-                logits = logits_ema
-                outputs = outputs_ema
-                prob_flow, predicted_flow = torch.max(outputs, 1)
+                # logits = (logits1 + logits2) / 2  
+    
+                prob_flow1, predicted_flow1 = torch.max(outputs1, 1)
+                prob_flow2, predicted_flow2 = torch.max(outputs2, 1)
 
                 total += targets.size(0)
-                correct_flow += predicted_flow.eq(targets).cpu().sum().item()  
-                prob_sum_flow += prob_flow.cpu().sum().item()
+                correct_flow1 += predicted_flow1.eq(targets).cpu().sum().item()  
+                prob_sum_flow1 += prob_flow1.cpu().sum().item()
 
-                prob_ce, predicted_ce = torch.max(logits, 1)
-                correct_ce += predicted_ce.eq(targets).cpu().sum().item()  
-                prob_sum_ce += prob_ce.cpu().sum().item()
+                correct_flow2 += predicted_flow2.eq(targets).cpu().sum().item()  
+                prob_sum_flow2 += prob_flow2.cpu().sum().item()
+
+                # prob_ce, predicted_ce = torch.max(logits, 1)
+                # correct_ce += predicted_ce.eq(targets).cpu().sum().item()  
+                # prob_sum_ce += prob_ce.cpu().sum().item()
                 
-                logits_mix = (logits + outputs) / 2
-                prob_mix, predicted_mix = torch.max(logits_mix, 1)
+                outputs = (outputs1 + outputs2) / 2
+
+                prob_mix, predicted_mix = torch.max(outputs, 1)
                 correct_mix += predicted_mix.eq(targets).cpu().sum().item()
                 prob_sum_mix += prob_mix.cpu().sum().item()
 
@@ -579,26 +418,28 @@ class FlowTrainer:
                     break
                     
 
-        acc_flow = 100.*correct_flow/total
-        confidence_flow = prob_sum_flow/total
+        acc_flow1 = 100.*correct_flow1/total
+        confidence_flow1 = prob_sum_flow1/total
 
-        acc_ce = 100.*correct_ce/total
-        confidence_ce = prob_sum_ce/total
+        acc_flow2 = 100.*correct_flow2/total
+        confidence_flow2 = prob_sum_flow2/total
+
+        # acc_ce = 100.*correct_ce/total
+        # confidence_ce = prob_sum_ce/total
         
-        acc_mix = 100.*correct_mix/total
-        confidence_mix = prob_sum_mix/total
+        acc = 100.*correct_mix/total
+        confidence = prob_sum_mix/total
 
-    
-        if self.args.lossType == "ce":
-            acc, confidence =  acc_ce, confidence_ce
-        elif self.args.lossType == "nll":
-            acc, confidence =  acc_flow, confidence_flow
-        elif self.args.lossType == "mix":
-            acc, confidence =  acc_mix, confidence_mix
+        # if self.args.lossType == "ce":
+        #     acc, confidence =  acc_ce, confidence_ce
+        # elif self.args.lossType == "nll":
+        #     acc, confidence =  acc_flow, confidence_flow
+        # elif self.args.lossType == "mix":
+        #     acc, confidence =  acc_mix, confidence_mix
         
         print("\n| Test Epoch #%d\t Accuracy: %.2f%%\t Condifence: %.2f%%\n" %(epoch, acc, confidence))
 
-        return acc_flow, confidence_flow, acc_ce, confidence_ce, acc_mix, confidence_mix
+        return acc, confidence
 
     def torch_onehot(self, y, Nclass):
         if y.is_cuda:
@@ -611,12 +452,12 @@ class FlowTrainer:
         return y_onehot
 
     ## Pseudo-label
-    def get_pseudo_label(self, net, flownet, inputs_u, inputs_u2, std = 0, updateCnetering = False):
+    def get_pseudo_label(self, net, flowNet, inputs_u, inputs_u2, std = 0, updateCnetering = False):
         _, outputs_u11, features_u11 = net(inputs_u, get_feature = True)
         _, outputs_u12, features_u12 = net(inputs_u2, get_feature = True)
         
-        flow_outputs_u11 = self.predict(flownet, features_u11, std, centering = (self.args.centering and updateCnetering))
-        flow_outputs_u12 = self.predict(flownet, features_u12, std, centering = False)
+        flow_outputs_u11 = self.predict(flowNet, features_u11, std, centering = (self.args.centering and updateCnetering))
+        flow_outputs_u12 = self.predict(flowNet, features_u12, std, centering = False)
         
         pu_net = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1)) / 2
         pu_flow = (flow_outputs_u11 + flow_outputs_u12) / 2
@@ -706,39 +547,15 @@ class FlowTrainer:
         # e = b.sum(dim=1)
         # return e
 
-    def log_prob(self, target, feature, flownet):
+    def log_prob(self, target, feature, flowNet):
         delta_p = torch.zeros(target.shape[0], target.shape[1], 1).cuda() 
-        approx21, delta_log_p2 = flownet(target, feature, delta_p)
+        approx21, delta_log_p2 = flowNet(target, feature, delta_p)
         
         approx2 = standard_normal_logprob(approx21).view(target.size()[0], -1).sum(1, keepdim=True)
         delta_log_p2 = delta_log_p2.view(target.size()[0], target.shape[1], 1).sum(1)
         log_p2 = (approx2 - delta_log_p2)
         nll = -log_p2.mean()
         return nll, log_p2
-
-    @torch.no_grad()
-    def distribution_alignment(self, logits, decay = 0.999):
-        batch_size = logits.size(0)
-        num_class = logits.size(1)
-        _, logits_one_hot = logits.max(dim=1)
-
-        p_model = torch.zeros(num_class).cuda()
-        p_target = torch.zeros(num_class).cuda()
-        da_weight = torch.zeros(num_class).cuda()
-        
-        for idx in range(num_class):
-            class_ind = [i for i, x in enumerate(logits_one_hot) if x==idx]
-            
-            p_target[idx] = 1 / num_class
-            p_model[idx] = len(class_ind) / batch_size
-
-        da_weight = (p_target + 1e-6) / (p_model + 1e-6)
-        da_weight = F.normalize(da_weight, dim=0, p=1)
-        self.da_weight_ema = self.da_weight_ema * decay + da_weight * (1 - decay)
-        
-        logits_out = torch.mul(logits, self.da_weight_ema)
-        logits_out = F.normalize(logits_out, dim=1, p=1) # batch, logit
-        return logits_out
 
     @torch.no_grad()
     def update_center(self, flowNet, teacher_output):

@@ -33,19 +33,16 @@ except ImportError:
 # import wandb
 # wandb.init(project="noisy-label-project", entity="..")
 
-def Selection_Rate(args, prob, pre_threshold):
+def Selection_Rate(args, prob):
     threshold = torch.mean(prob)
     if threshold.item() > args.d_u:
             threshold = threshold - (threshold-torch.min(prob))/args.tau
     if threshold.item() < args.d_up:
             threshold = threshold + (torch.max(prob) - threshold)/args.tau
-    threshold = (args.tma_decay) * pre_threshold + (1 - args.tma_decay) * threshold 
     SR = torch.sum(prob<threshold).item()/args.num_samples
     print("threshold : ", torch.mean(prob))
     print("threshold(new) : ", threshold)
     print("prob size : ", prob.size())
-    print("down :", torch.sum(prob<threshold).item())
-    print("up :", torch.sum(prob>threshold).item())
     if SR <= 0.1  or SR >= 1.0:
         new_SR = np.clip(SR, 0.1 , 0.9)
         print(f'WARNING: sample rate = {SR}, set to {new_SR}')
@@ -56,11 +53,10 @@ def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
     labeled_idx = labeled_trainloader.dataset.pred_idx
     unlabeled_idx = unlabeled_trainloader.dataset.pred_idx
     origin_prob =  labeled_trainloader.dataset.origin_prob
-    if args.useUncertainty:
-        origin_densitys = labeled_trainloader.dataset.origin_densitys
+
     labeled_prob = [origin_prob[i] for i in labeled_idx]
     unlabeled_prob = [origin_prob[i] for i in unlabeled_idx]
-    sample_ratio = torch.sum(prob<threshold).item()/args.num_samples
+    sample_ratio = torch.sum(origin_prob < threshold).item()/args.num_samples
 
     num_cleanset, num_noiseset = len(labeled_trainloader.dataset), len(unlabeled_trainloader.dataset)
     num_wholeset = num_cleanset + num_noiseset
@@ -96,16 +92,10 @@ def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
     for idx_noise_zip in [zip(labeled_idx, cleanset_noise_mask), zip(unlabeled_idx, noiseset_noise_mask)]:
         for idx, is_noise in idx_noise_zip:
             p = origin_prob[idx]
-            if args.useUncertainty:
-                d = origin_densitys[idx]
             if is_noise == 1.0:
                 noise_prob.append(float(p))
-                if args.useUncertainty:
-                    noise_density.append(np.abs(float(d)))
             else:
                 clean_prob.append(float(p))
-                if args.useUncertainty:
-                    clean_density.append(np.abs(float(d)))
 
     plt.clf()
     kwargs = dict(histtype='stepfilled', alpha=0.75, density=False, bins=20)
@@ -121,47 +111,11 @@ def logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader):
     plt.grid(True)
     plt.savefig(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
     
-    if args.useUncertainty:
-        plt.clf()
-        kwargs = dict(histtype='stepfilled', alpha=0.75, density=False, bins=20)
-        plt.hist(clean_density, color='green', label='clean', **kwargs)
-        plt.hist(noise_density, color='red'  , label='noisy', **kwargs)
-
-        plt.axvline(x=origin_densitys.mean(), color='gray')
-        plt.xlabel('Density Values')
-        plt.ylabel('count')
-        plt.title(f'Density Distribution of N Samples epoch :{epoch}')
-        # plt.xlim(-150., -50.)
-        plt.grid(True)
-        plt.savefig(f'{model_save_loc}/Density_distribution/epoch{epoch}.png')
-
-        
-        plt.clf()
-        max_point = 200.
-        vis_count = max_point * (len(clean_prob) / (len(clean_prob) + len(noise_prob)))
-        for idx, (jsd_value, density_value) in tqdm(enumerate(zip(clean_prob, clean_density))):
-            plt.scatter(jsd_value, density_value, c = 'green', s = 20, alpha = .5,marker = ".")
-            if idx > vis_count:
-                break
-
-        for idx, (jsd_value, density_value) in tqdm(enumerate(zip(noise_prob, noise_density))):
-                plt.scatter(jsd_value, density_value, c = 'blue', s = 20, alpha = .5,marker = ".")
-                if idx > (max_point - vis_count):
-                    break
-
-        plt.xlabel('JSD')
-        plt.ylabel('Uncertainty')
-        plt.title(f' Joint distribution of loss values and epistemic uncertainty epoch :{epoch}')
-        plt.grid(True)
-        plt.savefig(f'{model_save_loc}/Density_distribution/epoch{epoch}_jsd_uncertainty.png')
-
     if (wandb != None):
         logMsg = {}
         logMsg["epoch"] = epoch
         logMsg["JSD"] = wandb.Image(f'{model_save_loc}/JSD_distribution/epoch{epoch}.png')
-        if args.useUncertainty:
-            logMsg["Density"] = wandb.Image(f'{model_save_loc}/Density_distribution/epoch{epoch}.png')
-            logMsg["Density"] = wandb.Image(f'{model_save_loc}/Density_distribution/epoch{epoch}_jsd_uncertainty.png')
+        
         logMsg["JSD/threshold"] = threshold
         logMsg["JSD/sample_ratio"] = sample_ratio
         logMsg["JSD/labeled_mean"] =  np.mean(labeled_prob)
@@ -268,41 +222,42 @@ def print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, batch_idx):
         logMsg["label_count/target_labels_x"] =  max(target_labels_x)
         wandb.log(logMsg)
 
-def load_model(model_save_loc, net, flowNet, flowTrainer, best=False):
+def load_model(model_save_loc, net1, flowNet1, net2, flowNet2, best=False):
     if best:
-        model_name = 'Net.pth'
-        model_name_flow = 'FlowNet.pth'
-        model_name_ema = 'Net_ema.pth'
-        model_name_flow_ema = 'FlowNet_ema.pth'
+        model_name_1 = 'Net_1.pth'
+        model_name_flow_1 = 'FlowNet_1.pth'
+        model_name_2 = 'Net_2.pth'
+        model_name_flow_2 = 'FlowNet_2.pth'
     else:
-        model_name = 'Net_warmup.pth'
-        model_name_flow = 'FlowNet_warmup.pth'
-        model_name_ema = 'Net_warmup_ema.pth'
-        model_name_flow_ema = 'FlowNet_warmup_ema.pth'
+        model_name_1 = 'Net_warmup_1.pth'
+        model_name_flow_1 = 'FlowNet_warmup_1.pth'
+        model_name_2 = 'Net_warmup_2.pth'
+        model_name_flow_2 = 'FlowNet_warmup_2.pth'
 
     device = torch.device('cuda', torch.cuda.current_device())
-    net.load_state_dict(torch.load(os.path.join(model_save_loc, model_name), map_location=device)['net'])
-    flowNet.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow), map_location=device)['net'])
-    
-    flowTrainer.net_ema.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_ema), map_location=device)['net'])
-    flowTrainer.flowNet_ema.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_ema), map_location=device)['net'])
+    net1.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_1), map_location=device)['net'])
+    flowNet1.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_1), map_location=device)['net'])
+
+    net2.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_2), map_location=device)['net'])
+    flowNet2.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_2), map_location=device)['net'])
+
     return
 
-def save_model(net, flowNet, epoch, acc = 0):
+def save_model(net1, flowNet1, net2, flowNet2, epoch, acc = 0):
     if epoch <args.warm_up:
-        model_name = 'Net_warmup.pth'
-        model_name_flow = 'FlowNet_warmup.pth'
-        model_name_ema = 'Net_warmup_ema.pth'
-        model_name_flow_ema = 'FlowNet_warmup_ema.pth'
+        model_name_1 = 'Net_warmup_1.pth'
+        model_name_flow_1 = 'FlowNet_warmup_1.pth'
+        model_name_2 = 'Net_warmup_2.pth'
+        model_name_flow_2 = 'FlowNet_warmup_2.pth'
     else:
-        model_name = 'Net.pth'
-        model_name_flow = 'FlowNet.pth'
-        model_name_ema = 'Net_ema.pth'
-        model_name_flow_ema = 'FlowNet_ema.pth'
+        model_name_1 = 'Net_1.pth'
+        model_name_flow_1 = 'FlowNet_1.pth'
+        model_name_2 = 'Net_2.pth'
+        model_name_flow_2 = 'FlowNet_2.pth'
 
     print("Save the Model-----")
-    checkpoint = {
-        'net': net.state_dict(),
+    checkpoint_1 = {
+        'net': net1.state_dict(),
         'Model_number': 1,
         'Noise_Ratio': args.ratio,
         'Loss Function': 'CrossEntropyLoss',
@@ -315,8 +270,8 @@ def save_model(net, flowNet, epoch, acc = 0):
         'epoch': epoch,
     }
 
-    checkpoint_flow = {
-        'net': flowNet.state_dict(),
+    checkpoint_flow_1 = {
+        'net': flowNet1.state_dict(),
         'Model_number': 2,
         'Noise_Ratio': args.ratio,
         'Loss Function': 'log-likelihood',
@@ -327,8 +282,8 @@ def save_model(net, flowNet, epoch, acc = 0):
         'epoch': epoch,
     }
     
-    checkpoint_ema = {
-        'net': flowTrainer.net_ema.state_dict(),
+    checkpoint_2 = {
+        'net': net2.state_dict(),
         'Model_number': 3,
         'Noise_Ratio': args.ratio,
         'Loss Function': 'CrossEntropyLoss',
@@ -341,8 +296,8 @@ def save_model(net, flowNet, epoch, acc = 0):
         'epoch': epoch,
     }
 
-    checkpoint_flow_ema = {
-        'net': flowTrainer.flowNet_ema.state_dict(),
+    checkpoint_flow_2 = {
+        'net': flowNet2.state_dict(),
         'Model_number': 4,
         'Noise_Ratio': args.ratio,
         'Loss Function': 'log-likelihood',
@@ -353,11 +308,27 @@ def save_model(net, flowNet, epoch, acc = 0):
         'epoch': epoch,
     }
 
-    torch.save(checkpoint, os.path.join(model_save_loc, model_name))
-    torch.save(checkpoint_flow, os.path.join(model_save_loc, model_name_flow))
+    torch.save(checkpoint_1, os.path.join(model_save_loc, model_name_1))
+    torch.save(checkpoint_flow_1, os.path.join(model_save_loc, model_name_flow_1))
     
-    torch.save(checkpoint_ema, os.path.join(model_save_loc, model_name_ema))
-    torch.save(checkpoint_flow_ema, os.path.join(model_save_loc, model_name_flow_ema))
+    torch.save(checkpoint_2, os.path.join(model_save_loc, model_name_2))
+    torch.save(checkpoint_flow_2, os.path.join(model_save_loc, model_name_flow_2))
+
+def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow):
+    ## Calculate JSD values and Filter Rate
+    print("Calculate JSD Net ", str(idx), "\n")
+    prob = flowTrainer.Calculate_JSD(net1, flowNet1, net2, flowNet2, args.num_samples, eval_loader)
+    SR , threshold = Selection_Rate(args, prob)
+    
+    print('Train Net ', str(idx), '\n')
+    labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
+    
+    if args.isRealTask:
+        logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
+    else:
+        logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
+
+    flowTrainer.train(epoch, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
 
 if __name__ == '__main__':
     ## Arguments to pass 
@@ -398,8 +369,6 @@ if __name__ == '__main__':
         os.mkdir(model_save_loc)
     if not os.path.exists(model_save_loc + '/JSD_distribution'):
         os.mkdir(model_save_loc + '/JSD_distribution')
-    if not os.path.exists(model_save_loc + '/Density_distribution'):
-        os.mkdir(model_save_loc + '/Density_distribution')
 
     ## Log files
     stats_log=open(model_save_loc +'/%s_%.1f_%s'%(args.dataset,args.ratio,args.noise_mode)+'_stats.txt','w') 
@@ -436,44 +405,55 @@ if __name__ == '__main__':
         loader = dataloader(batch_size=args.batch_size,num_workers=args.num_workers,root_dir=args.data_path, num_class=args.num_class)
 
     print('| Building net')
-    net = create_model(args)
+    net1 = create_model(args)
+    net2 = create_model(args)
 
     # flow model
     flowTrainer = FlowTrainer(args)
-    flowNet = flowTrainer.create_model()
+    flowNet1 = flowTrainer.create_model()
+    flowNet2 = flowTrainer.create_model()
 
     # gpus
     if len(args.gpuid) > 1:
-        net = nn.DataParallel(net)
-        flowNet = nn.DataParallel(flowNet)
+        net1 = nn.DataParallel(net1)
+        flowNet1 = nn.DataParallel(flowNet1)
+        net2 = nn.DataParallel(net2)
+        flowNet2 = nn.DataParallel(flowNet2)
 
     cudnn.benchmark = True
 
     ## Optimizer and Scheduler
-    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay) 
+    optimizer1 = optim.SGD(net1.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay)
+    optimizer2 = optim.SGD(net2.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay) 
     if args.optimizer == 'SGD':
-        optimizerFlow = optim.SGD(flowNet.parameters(), lr=args.lr_f, momentum=0.9, weight_decay=args.weight_decay)
+        optimizerFlow1 = optim.SGD(flowNet1.parameters(), lr=args.lr_f, momentum=0.9, weight_decay=args.weight_decay)
+        optimizerFlow2 = optim.SGD(flowNet2.parameters(), lr=args.lr_f, momentum=0.9, weight_decay=args.weight_decay)
     elif args.optimizer == 'AdamW':
-        optimizerFlow = optim.AdamW(flowNet.parameters(), lr=args.lr_f)
+        optimizerFlow1 = optim.AdamW(flowNet1.parameters(), lr=args.lr_f)
+        optimizerFlow2 = optim.AdamW(flowNet2.parameters(), lr=args.lr_f)
 
     if args.dataset=='TinyImageNet':
-        scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.98)
-        schedulerFlow = optim.lr_scheduler.ExponentialLR(optimizerFlow, 0.98)
+        scheduler1 = optim.lr_scheduler.ExponentialLR(optimizer, 0.98)
+        schedulerFlow1 = optim.lr_scheduler.ExponentialLR(optimizerFlow, 0.98)
+        scheduler2 = optim.lr_scheduler.ExponentialLR(optimizer, 0.98)
+        schedulerFlow2 = optim.lr_scheduler.ExponentialLR(optimizerFlow, 0.98)
     else:
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epochs, args.lr / 1e2)
-        schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, args.num_epochs, args.lr_f / 1e2)
+        scheduler1 = optim.lr_scheduler.CosineAnnealingLR(optimizer1, args.num_epochs, args.lr / 1e2)
+        schedulerFlow1 = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow1, args.num_epochs, args.lr_f / 1e2)
+        scheduler2 = optim.lr_scheduler.CosineAnnealingLR(optimizer2, args.num_epochs, args.lr / 1e2)
+        schedulerFlow2 = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow2, args.num_epochs, args.lr_f / 1e2)
         # schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, 20, args.lr_f / 1e2, verbose=True)
         # schedulerFlow = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizerFlow, 20, 2,  args.lr_f / 1e2)
     # else:
     #     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, 280, args.lr / 1e2)
     #     schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, 280, args.lr_f / 1e2)
 
-    flowTrainer.setEma(net, flowNet)
+    # flowTrainer.setEma(net, flowNet)
 
     ## Resume from the warmup checkpoint 
     if args.resume:
         start_epoch = args.warm_up
-        load_model(model_save_loc, net, flowNet, flowTrainer)
+        load_model(model_save_loc, net1, flowNet1, net2, flowNet2)
         
     elif args.pretrain != '':
         start_epoch = 0
@@ -483,7 +463,6 @@ if __name__ == '__main__':
         start_epoch = 0
 
     best_acc = 0
-    jsd_threshold = args.tma_thr
 
     ## Warmup and SSL-Training 
     for epoch in range(start_epoch,args.num_epochs+1):
@@ -497,57 +476,44 @@ if __name__ == '__main__':
         if epoch<args.warm_up:       
             warmup_trainloader = loader.run(0, 'warmup')
 
-            print('Warmup Model')
-            flowTrainer.warmup_standard(epoch, net, flowNet, optimizer, optimizerFlow, warmup_trainloader)   
+            print('\nWarmup Model Net 1')
+            flowTrainer.warmup_standard(epoch, net1, flowNet1, optimizer1, optimizerFlow1, warmup_trainloader)
+
+            print('\nWarmup Model Net 2')
+            flowTrainer.warmup_standard(epoch, net2, flowNet2, optimizer2, optimizerFlow2, warmup_trainloader)   
         
         else:
-            ## Calculate JSD values and Filter Rate
-            print("Calculate JSD")
-            prob = flowTrainer.Calculate_JSD(net, flowNet, args.num_samples, eval_loader)
-            SR , threshold = Selection_Rate(args, prob, jsd_threshold)
-            jsd_threshold = threshold
-            print('Train Net\n')
-            if args.useUncertainty:
-                print("Calculate Density")
-                density = flowTrainer.Calculate_Density(net, flowNet, args.num_samples, eval_loader)
-                labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob, densitys=density) # Uniform Selection
-            else:
-                labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
-            if args.isRealTask:
-                logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
-            else:
-                logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
-            flowTrainer.train(epoch, net, flowNet, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
-
+            run(1, net1, flowNet1, net2, flowNet2, optimizer1, optimizerFlow1)
+            run(2, net2, flowNet2, net1, flowNet1, optimizer2, optimizerFlow2)
         
+        ## Acc
+        acc_flow, confidence_flow = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, test_loader)
         
-        acc_flow, confidence_flow, acc_ce, confidence_ce, acc_mix, confidence_mix  = flowTrainer.testByFlow(epoch, net, flowNet, test_loader)
-        
+        ## Acc(Train Dataset)
+        print('\n =====Noise Acc====')
         noise_valloader = loader.run(0, 'val_noise')
-        acc_flow_n, confidence_flow_n, acc_ce_n, confidence_ce_n, acc_mix_n, confidence_mix_n = flowTrainer.testByFlow(epoch, net, flowNet, noise_valloader, test_num = 5000)
+        acc_flow_n, confidence_flow_n = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, noise_valloader, test_num = 5000)
+        print('\n ==================')
         
-        scheduler.step()
-        schedulerFlow.step()
+        scheduler1.step()
+        schedulerFlow1.step()
+        scheduler2.step()
+        schedulerFlow2.step()
 
-        acc = max(acc_flow, acc_ce, acc_mix)
-
+        acc = acc_flow
         ## wandb
         if (wandb != None):
             logMsg = {}
             logMsg["epoch"] = epoch
             logMsg["runtime"] = time.time() - startTime
-            logMsg["acc/test"] = acc
-            logMsg["confidence score"] = max(confidence_flow, confidence_ce, confidence_mix)
-            logMsg["acc/noise_val"] = max(acc_flow_n, acc_ce_n, acc_mix_n)
-            logMsg["confidence score(noise)"] =  max(confidence_flow_n, confidence_ce_n, confidence_mix_n)
-            if args.lossType == "ce" or args.lossType == "mix":
-                logMsg["headAcc/ce)"] = acc_ce
-                logMsg["headAcc/nll)"] = acc_flow
-                logMsg["headAcc/mix)"] = acc_mix
+            logMsg["acc/test"] = acc_flow
+            logMsg["confidence score"] = confidence_flow
+            logMsg["acc/noise_val"] = acc_flow_n
+            logMsg["confidence score(noise)"] = confidence_flow_n
             wandb.log(logMsg)
         
         if acc > best_acc:
-            save_model(net, flowNet, epoch, acc)
+            save_model(net1, flowNet1, net2, flowNet2, epoch, acc)
             best_acc = acc
         if acc < best_acc - 10.:
             print("early stop")
