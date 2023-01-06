@@ -14,6 +14,7 @@ centering: True
 center_momentum: 0.8
 decay: 0.99
 sharpening: 'UNICON'
-Tu: 0.5
-Tu_warmup: 1.0
+T: 0.5
+Tf_warmup: 1.0
+Tf: 0.5
 cond_size: 512

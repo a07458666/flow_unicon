@@ -19,8 +19,10 @@ clip_grad: True
 center_momentum: 0.8
 decay: 0.99
 
+T: 0.5
+
 sharpening: 'UNICON'
-Tu_warmup: 1.0
-Tu: 0.7
+Tf_warmup: 1.0
+Tf: 0.7
 
 pretrained: True

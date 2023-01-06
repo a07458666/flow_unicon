@@ -15,6 +15,10 @@ cond_size: 512
 center_momentum: 0.8
 decay: 0.99
 
+T: 0.5
+
 sharpening: 'UNICON'
-Tu_warmup: 0.5
-Tu: 0.5
+Tf_warmup: 1.0
+Tf: 0.7
+
+flow_sp: False

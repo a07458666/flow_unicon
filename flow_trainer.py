@@ -148,34 +148,52 @@ class FlowTrainer:
             inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x = inputs_x.cuda(), inputs_x2.cuda(), inputs_x3.cuda(), inputs_x4.cuda(), labels_x.cuda(), w_x.cuda()
             inputs_u, inputs_u2, inputs_u3, inputs_u4 = inputs_u.cuda(), inputs_u2.cuda(), inputs_u3.cuda(), inputs_u4.cuda()
 
-            lamb_Tu = linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.lambda_p, self.args.Tu_warmup, self.args.Tu)
+            lamb_Tu = linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.lambda_p, self.args.Tf_warmup, self.args.Tf)
 
             with torch.no_grad():
                 # Label co-guessing of unlabeled samples        
                 pu_net_1, pu_flow_1 = self.get_pseudo_label(net1, flowNet1, inputs_u, inputs_u2, std = self.args.pseudo_std)
                 pu_net_2, pu_flow_2 = self.get_pseudo_label(net2, flowNet2, inputs_u, inputs_u2, std = self.args.pseudo_std)
                 
-                pu_net_sp_1 = self.sharpening(pu_net_1, lamb_Tu)
-                pu_net_sp_2 = self.sharpening(pu_net_2, lamb_Tu)
+                pu_net_sp_1 = self.sharpening(pu_net_1, self.args.T)
+                pu_net_sp_2 = self.sharpening(pu_net_2, self.args.T)
                 
                 if self.args.flow_sp:
                     pu_flow_1 = self.sharpening(pu_flow_1, lamb_Tu)
                     pu_flow_2 = self.sharpening(pu_flow_2, lamb_Tu)
 
+
+                
+
                 ## Pseudo-label
-                targets_u = (pu_flow_1 + pu_flow_2) / 2
+                if self.args.lossType == "ce":
+                    targets_u = (pu_net_sp_1 + pu_net_sp_2) / 2
+                elif self.args.lossType == "nll":
+                    targets_u = (pu_flow_1 + pu_flow_2) / 2
+                elif self.args.lossType == "mix":
+                    targets_u = (pu_net_sp_1 + pu_net_sp_2 + pu_flow_1 + pu_flow_2) / 4
+
                 targets_u = targets_u.detach()        
 
                 ## Label refinement
                 px_net_1, px_flow_1 = self.get_pseudo_label(net1, flowNet1, inputs_x, inputs_x, std = self.args.pseudo_std)
                 px_net_2, px_flow_2 = self.get_pseudo_label(net2, flowNet2, inputs_x2, inputs_x2, std = self.args.pseudo_std)
 
-                px = (px_flow_1 + px_flow_2) / 2
+                if self.args.lossType == "ce":
+                    px = (px_net_1 + px_net_2) / 2
+                elif self.args.lossType == "nll":
+                    px = (px_flow_1 + px_flow_2) / 2
+                elif self.args.lossType == "mix":
+                    px = (px_net_1 + px_net_2 + px_flow_1 + px_flow_2) / 4
 
                 px_mix = w_x*labels_x + (1-w_x)*px
 
-                targets_x = self.sharpening(px_mix, lamb_Tu)        
+                targets_x = self.sharpening(px_mix, self.args.T)        
                 targets_x = targets_x.detach()
+
+                ## updateCnetering
+                if centering:
+                    _, _ = self.get_pseudo_label(net1, flownet1, inputs_u, inputs_u2, std = self.args.pseudo_std, updateCnetering = True)   
 
                 if not self.args.isRealTask:
                     labels_x_o = labels_x_o.cuda()
@@ -360,6 +378,7 @@ class FlowTrainer:
         flowNet1.eval()
         net2.eval()
         flowNet2.eval()
+        
         total = 0
         # flow acc
         correct_flow1 = 0
@@ -370,12 +389,15 @@ class FlowTrainer:
         prob_sum_flow2 = 0
 
         # cross entropy acc
-        # correct_ce = 0
-        # prob_sum_ce = 0
+        correct_ce1 = 0
+        prob_sum_ce1 = 0
 
-        # mix acc
-        correct_mix = 0
-        prob_sum_mix = 0
+        correct_ce2 = 0
+        prob_sum_ce2 = 0
+
+        # acc
+        correct = 0
+        prob_sum = 0
 
         with torch.no_grad():
             for batch_idx, (inputs, targets) in tqdm(enumerate(test_loader)):
@@ -387,36 +409,45 @@ class FlowTrainer:
                 _, logits2, feature2 = net2(inputs, get_feature = True)
                 outputs2 = self.predict(flowNet2, feature2)
 
-                # with self.net_ema.average_parameters():
-                #     with self.flowNet_ema.average_parameters():
-                #         _, logits_ema, feature_ema = net(inputs, get_feature = True)
-                #         outputs_ema = self.predict(flowNet, feature_ema)
-                
-                # logits = (logits1 + logits2) / 2  
-    
+                total += targets.size(0)
+
+                prob_ce1, predicted_ce1 = torch.max(logits1, 1)
+                prob_ce2, predicted_ce2 = torch.max(logits2, 1)
+
                 prob_flow1, predicted_flow1 = torch.max(outputs1, 1)
                 prob_flow2, predicted_flow2 = torch.max(outputs2, 1)
 
-                total += targets.size(0)
+                correct_ce1 += predicted_ce1.eq(targets).cpu().sum().item()  
+                prob_sum_ce1 += prob_ce1.cpu().sum().item()
+
+                correct_ce2 += predicted_ce2.eq(targets).cpu().sum().item()  
+                prob_sum_ce2 += prob_ce2.cpu().sum().item()
+
                 correct_flow1 += predicted_flow1.eq(targets).cpu().sum().item()  
                 prob_sum_flow1 += prob_flow1.cpu().sum().item()
 
                 correct_flow2 += predicted_flow2.eq(targets).cpu().sum().item()  
                 prob_sum_flow2 += prob_flow2.cpu().sum().item()
 
-                # prob_ce, predicted_ce = torch.max(logits, 1)
-                # correct_ce += predicted_ce.eq(targets).cpu().sum().item()  
-                # prob_sum_ce += prob_ce.cpu().sum().item()
+                if self.args.lossType == "ce":
+                    outputs = (logits1 + logits2) / 2
+                elif self.args.lossType == "nll":
+                    outputs = (outputs1 + outputs2) / 2
+                elif self.args.lossType == "mix":
+                    outputs = (logits1 + logits2 + outputs1 + outputs2) / 4
                 
-                outputs = (outputs1 + outputs2) / 2
-
-                prob_mix, predicted_mix = torch.max(outputs, 1)
-                correct_mix += predicted_mix.eq(targets).cpu().sum().item()
-                prob_sum_mix += prob_mix.cpu().sum().item()
+                prob, predicted = torch.max(outputs, 1)
+                correct += predicted.eq(targets).cpu().sum().item()
+                prob_sum += prob.cpu().sum().item()
 
                 if test_num > 0 and total >= test_num:
                     break
-                    
+
+        acc_ce1 = 100.*correct_ce1/total
+        confidence_ce1 = prob_sum_ce1/total
+
+        acc_ce2 = 100.*correct_ce2/total
+        confidence_ce2 = prob_sum_ce2/total                    
 
         acc_flow1 = 100.*correct_flow1/total
         confidence_flow1 = prob_sum_flow1/total
@@ -424,18 +455,8 @@ class FlowTrainer:
         acc_flow2 = 100.*correct_flow2/total
         confidence_flow2 = prob_sum_flow2/total
 
-        # acc_ce = 100.*correct_ce/total
-        # confidence_ce = prob_sum_ce/total
-        
-        acc = 100.*correct_mix/total
-        confidence = prob_sum_mix/total
-
-        # if self.args.lossType == "ce":
-        #     acc, confidence =  acc_ce, confidence_ce
-        # elif self.args.lossType == "nll":
-        #     acc, confidence =  acc_flow, confidence_flow
-        # elif self.args.lossType == "mix":
-        #     acc, confidence =  acc_mix, confidence_mix
+        acc = 100.*correct/total
+        confidence = prob_sum/total
         
         print("\n| Test Epoch #%d\t Accuracy: %.2f%%\t Condifence: %.2f%%\n" %(epoch, acc, confidence))
 

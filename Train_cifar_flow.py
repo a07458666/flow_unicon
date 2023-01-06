@@ -129,7 +129,7 @@ def train(epoch, net, flownet, net_ema, flowNet_ema, optimizer, optimizerFlow, l
             # pu = (pu_flow + pu_net) / 2
             pu = pu_flow
             
-            lamb_Tu = (1 - linear_rampup(epoch+batch_idx/num_iter, args.warm_up, args.lambda_p, args.Tu))
+            lamb_Tu = (1 - linear_rampup(epoch+batch_idx/num_iter, args.warm_up, args.lambda_p, args.Tf))
 
             ptu = pu**(1/lamb_Tu)            ## Temparature Sharpening
             
