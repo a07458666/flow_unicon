@@ -163,8 +163,6 @@ class FlowTrainer:
                     pu_flow_2 = self.sharpening(pu_flow_2, lamb_Tu)
 
 
-                
-
                 ## Pseudo-label
                 if self.args.lossType == "ce":
                     targets_u = (pu_net_sp_1 + pu_net_sp_2) / 2
@@ -192,7 +190,7 @@ class FlowTrainer:
                 targets_x = targets_x.detach()
 
                 ## updateCnetering
-                if centering:
+                if self.args.centering:
                     _, _ = self.get_pseudo_label(net1, flownet1, inputs_u, inputs_u2, std = self.args.pseudo_std, updateCnetering = True)   
 
                 if not self.args.isRealTask:
@@ -357,14 +355,15 @@ class FlowTrainer:
             input_z = torch.normal(mean = mean, std = std, size=(batch_size, sample_n, self.args.num_class)).cuda()
             approx21 = flowNet(input_z, feature, None, reverse=True)
             if len(self.args.gpuid) > 1:
-                approx21 = approx21 - flowNet.module.center
+                approx21_center = approx21 - flowNet.module.center
             else:
-                approx21 = approx21 - flowNet.center
+                approx21_center = approx21 - flowNet.center
             
             if centering:
+                approx21_center += (1 / self.args.num_class)
                 self.update_center(flowNet, approx21)
 
-            probs = torch.mean(approx21, dim=1, keepdim=False)
+            probs = torch.mean(approx21_center, dim=1, keepdim=False)
             
             if normalize:
                 probs = torch.tanh(probs)
