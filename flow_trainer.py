@@ -516,7 +516,7 @@ class FlowTrainer:
                 approx21_center = approx21 - flowNet.center
             
             if centering:
-                # approx21_center += (1 / self.args.num_class)
+                approx21_center += (1 / self.args.num_class)
                 self.update_center(flowNet, approx21)
 
             probs = torch.mean(approx21_center, dim=1, keepdim=False)
