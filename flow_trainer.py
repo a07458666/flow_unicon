@@ -161,6 +161,7 @@ class FlowTrainer:
                     with self.flowNet_ema.average_parameters():
                         pu_net_ema, pu_flow_ema = self.get_pseudo_label(net, flowNet, inputs_u, inputs_u2, std = self.args.pseudo_std, updateCnetering = True)        
                 pu_net, pu_flow = self.get_pseudo_label(net, flowNet, inputs_u, inputs_u2, std = self.args.pseudo_std)
+
                 
                 pu_net_sp = self.sharpening(pu_net, lamb_Tu)
                 pu_net_ema_sp = self.sharpening(pu_net_ema, lamb_Tu)
