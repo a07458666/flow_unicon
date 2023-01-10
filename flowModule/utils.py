@@ -430,7 +430,7 @@ def linear_rampup(current, warm_up, rampup_length = 16, start = 0.0, end = 1.0):
     return start + (end - start) * float(current)
 
 
-def mix_match(inputs, targets, alpha = 4):
+def mix_match(inputs, targets, target_2, alpha = 4):
     # MixMatch
     l = np.random.beta(alpha, alpha)        
     l = max(l, 1-l)
@@ -439,8 +439,10 @@ def mix_match(inputs, targets, alpha = 4):
 
     input_a, input_b   = inputs, inputs[idx]
     target_a, target_b = targets, targets[idx]
+    target_2_a, target_2_b = target_2, target_2[idx]
     
     ## Mixup
     mixed_input  = l * input_a  + (1 - l) * input_b        
     mixed_target = l * target_a + (1 - l) * target_b
-    return mixed_input, mixed_target
+    mixed_target_2 = l * target_2_a + (1 - l) * target_2_b
+    return mixed_input, mixed_target, mixed_target_2

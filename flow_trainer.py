@@ -13,6 +13,8 @@ from tqdm import tqdm
 from Contrastive_loss import *
 from torch_ema import ExponentialMovingAverage
 
+from torchvision.utils import save_image
+
 try:
     import wandb
 except ImportError:
@@ -32,7 +34,7 @@ class NegEntropy(object):
         return torch.mean(torch.sum(probs.log()*probs, dim=1))
 
 class FlowTrainer:
-    def __init__(self, args) -> None:
+    def __init__(self, args, model_save_loc) -> None:
         self.args = args
         self.cond_size = args.cond_size
         self.warm_up = args.warm_up
@@ -53,13 +55,14 @@ class FlowTrainer:
         self.da_weight_ema = (torch.ones(args.num_class) / args.num_class).cuda()
 
         ## log_file
-        # self.log_file = open('./log.txt','w')
+        self.model_save_loc = model_save_loc
+        self.log_file = open(model_save_loc + '/log.txt','w')
 
         return
 
     ## For Standard Training 
-    def warmup_standard(self, epoch, net, flownet, optimizer, optimizerFlow, dataloader):
-        flownet.train()
+    def warmup_standard(self, epoch, net, flowNet, optimizer, optimizerFlow, dataloader):
+        flowNet.train()
         if self.args.fix == 'net':
             net.eval()
         else:    
@@ -71,14 +74,14 @@ class FlowTrainer:
             labels_one_hot = torch.nn.functional.one_hot(labels, self.args.num_class).type(torch.cuda.FloatTensor)
 
             if self.args.warmup_mixup:
-                inputs, labels_one_hot = mix_match(inputs, labels_one_hot, self.args.alpha)    
+                inputs, labels_one_hot, _ = mix_match(inputs, labels_one_hot, labels_one_hot, self.args.alpha)    
 
             _, outputs, feature_flow = net(inputs, get_feature = True)
             flow_labels = labels_one_hot.unsqueeze(1).cuda()
             logFeature(feature_flow)      
   
             # == flow ==
-            loss_nll, log_p2 = self.log_prob(flow_labels, feature_flow, flownet)
+            loss_nll, log_p2 = self.log_prob(flow_labels, feature_flow, flowNet)
             # == flow end ===
 
             if self.args.lossType == "mix" or self.args.lossType == "ce":
@@ -125,9 +128,9 @@ class FlowTrainer:
                         %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
             sys.stdout.flush()
 
-    def train(self, epoch, net, flownet, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader):
+    def train(self, epoch, net, flowNet, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader):
         net.train()
-        flownet.train()
+        flowNet.train()
 
         unlabeled_train_iter = iter(unlabeled_trainloader)
         num_iter = (len(labeled_trainloader.dataset)//labeled_trainloader.batch_size)+1 
@@ -141,10 +144,6 @@ class FlowTrainer:
             
             batch_size = inputs_x.size(0)
 
-            ## log_file
-            # self.log_file.write("epoch : " + str(epoch)) 
-            # self.log_file.write("batch_idx : " + str(batch_idx)) 
-            # self.log_file.flush()
 
             # Transform label to one-hot
             labels_x_num = labels_x.cuda()
@@ -160,8 +159,8 @@ class FlowTrainer:
                 # Label co-guessing of unlabeled samples   
                 with self.net_ema.average_parameters():
                     with self.flowNet_ema.average_parameters():
-                        pu_net_ema, pu_flow_ema = self.get_pseudo_label(net, flownet, inputs_u, inputs_u2, std = self.args.pseudo_std, updateCnetering = True)        
-                pu_net, pu_flow = self.get_pseudo_label(net, flownet, inputs_u, inputs_u2, std = self.args.pseudo_std)
+                        pu_net_ema, pu_flow_ema = self.get_pseudo_label(net, flowNet, inputs_u, inputs_u2, std = self.args.pseudo_std, updateCnetering = True)        
+                pu_net, pu_flow = self.get_pseudo_label(net, flowNet, inputs_u, inputs_u2, std = self.args.pseudo_std)
                 
                 pu_net_sp = self.sharpening(pu_net, lamb_Tu)
                 pu_net_ema_sp = self.sharpening(pu_net_ema, lamb_Tu)
@@ -191,9 +190,9 @@ class FlowTrainer:
                 ## Label refinement
                 with self.net_ema.average_parameters():
                     with self.flowNet_ema.average_parameters():
-                        px_net_ema, px_flow_ema = self.get_pseudo_label(net, flownet, inputs_x, inputs_x2, std = self.args.pseudo_std)
+                        px_net_ema, px_flow_ema = self.get_pseudo_label(net, flowNet, inputs_x, inputs_x2, std = self.args.pseudo_std)
 
-                px_net, px_flow = self.get_pseudo_label(net, flownet, inputs_x, inputs_x2, std = self.args.pseudo_std)
+                px_net, px_flow = self.get_pseudo_label(net, flowNet, inputs_x, inputs_x2, std = self.args.pseudo_std)
                 px_jsd_dist = js_distance(px_flow, px_flow_ema, self.args.num_class).mean()
                 px_entropy = self.entropy(px_flow_ema).mean()
 
@@ -210,12 +209,11 @@ class FlowTrainer:
                 targets_x = self.sharpening(px_mix, lamb_Tu)        
                 targets_x = targets_x.detach()
 
-                ## log_file
-                # self.log_file.write("\targets_x : \n") 
-                # self.log_file.write(str(targets_x)) 
-                # self.log_file.write("\ntarget_u : \n") 
-                # self.log_file.write(str(targets_u)) 
-                # self.log_file.flush()
+               ## updateCnetering
+                if self.args.centering:
+                    with self.net_ema.average_parameters():
+                            with self.flowNet_ema.average_parameters():
+                                _, _ = self.get_pseudo_label(net, flowNet, inputs_u, inputs_u2, std = self.args.pseudo_std, updateCnetering = True)  
 
                 if not self.args.isRealTask:
                     labels_x_o = labels_x_o.cuda()
@@ -230,7 +228,6 @@ class FlowTrainer:
 
                     # Calculate label sources
                     u_sources_pseudo = js_distance(targets_u, labels_u_o, self.args.num_class)
-                    u_sp_sources_pseudo = js_distance(self.sharpening(targets_u, 0.01), labels_u_o, self.args.num_class)
                     x_sources_origin = js_distance(labels_x, labels_x_o, self.args.num_class)
                     x_sources_refine = js_distance(targets_x, labels_x_o, self.args.num_class)
 
@@ -250,8 +247,9 @@ class FlowTrainer:
 
             all_inputs  = torch.cat([inputs_x3, inputs_x4, inputs_u3, inputs_u4], dim=0)
             all_targets = torch.cat([targets_x, targets_x, targets_u, targets_u], dim=0)
+            all_targets_o = torch.cat([labels_x_o, labels_x_o, labels_u_o, labels_u_o], dim=0)
 
-            mixed_input, mixed_target = mix_match(all_inputs, all_targets, self.args.alpha)
+            mixed_input, mixed_target, mixed_target_o = mix_match(all_inputs, all_targets, all_targets_o, self.args.alpha)
                     
             _, logits, flow_feature = net(mixed_input, get_feature = True) # add flow_feature
 
@@ -273,22 +271,18 @@ class FlowTrainer:
                 loss_ce = Lx + lamb * Lu + penalty
 
             ## Flow loss
-            _, log_p2 = self.log_prob(mixed_target.unsqueeze(1).cuda(), flow_feature, flownet)
+            _, log_p2 = self.log_prob(mixed_target.unsqueeze(1).cuda(), flow_feature, flowNet)
 
             lamb_u = linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.linear_u, self.args.lambda_flow_u_warmup, self.args.lambda_flow_u)
             
             loss_nll_x = -log_p2[:batch_size*2].mean()
             loss_nll_u = -log_p2[batch_size*2:].mean()
 
-            ## log_file
-            # self.log_file.write("\nmixed_target : \n")
-            # self.log_file.write(str(mixed_target))
-            # self.log_file.write("\nloss_x : \n")
-            # self.log_file.write(str(-log_p2[:batch_size*2]))
-            # self.log_file.write("\nloss_u : \n")
-            # self.log_file.write(str(-log_p2[batch_size*2:]))
-            # self.log_file.write("\n")
-            # self.log_file.flush()
+            weight_loss = torch.where(-log_p2 < 200, 1, 0)
+
+            log_p2 *= weight_loss
+
+            # self.log_big_loss(-log_p2, mixed_target.unsqueeze(1), mixed_target_o.unsqueeze(1), flow_feature, mixed_input, epoch, batch_idx)
 
             if self.args.split:
                 loss_nll = loss_nll_x + (lamb_u * loss_nll_u)
@@ -334,12 +328,12 @@ class FlowTrainer:
                 logMsg["loss/nll_x"] = loss_nll_x.item()
                 logMsg["loss/nll_u"] = loss_nll_u.item()
 
-                logMsg["loss/nll_x_max"] = loss_nll_x.max()
-                logMsg["loss/nll_x_min"] = loss_nll_x.min()
-                logMsg["loss/nll_x_var"] = loss_nll_x.var()
-                logMsg["loss/nll_u_max"] = loss_nll_u.max()
-                logMsg["loss/nll_u_min"] = loss_nll_u.min()
-                logMsg["loss/nll_u_var"] = loss_nll_u.var()
+                logMsg["loss/nll_x_max"] = -log_p2[:batch_size*2].max()
+                logMsg["loss/nll_x_min"] = -log_p2[:batch_size*2].min()
+                logMsg["loss/nll_x_var"] = -log_p2[:batch_size*2].var()
+                logMsg["loss/nll_u_max"] = -log_p2[batch_size*2:].max()
+                logMsg["loss/nll_u_min"] = -log_p2[batch_size*2:].min()
+                logMsg["loss/nll_u_var"] = -log_p2[batch_size*2:].var()
 
                 logMsg["loss/simCLR"] = loss_simCLR.item()
                 logMsg["loss/reg_f_var_loss"] = reg_f_var_loss.item()
@@ -354,7 +348,6 @@ class FlowTrainer:
                 logMsg["feature_grad/min"] = flow_feature.grad.min().item()
                 
                 if not self.args.isRealTask:           
-                    logMsg["label_quality/unlabel_susp_pseudo_JSD_mean"] = u_sp_sources_pseudo.mean().item()
                     logMsg["label_quality/unlabel_pseudo_JSD_mean"] = u_sources_pseudo.mean().item()
                     logMsg["label_quality/label_origin_JSD_mean"] = x_sources_origin.mean().item()
                     logMsg["label_quality/label_refine_JSD_mena"] = x_sources_refine.mean().item()
@@ -366,13 +359,13 @@ class FlowTrainer:
 
                 if self.args.centering:
                     if len(self.args.gpuid) > 1:
-                        logMsg["centering(max)"] = flownet.module.center.max().item()
-                        logMsg["centering(min)"] = flownet.module.center.min().item()
-                        logMsg["centering(min)"] = flownet.module.center.min().item()
+                        logMsg["centering(max)"] = flowNet.module.center.max().item()
+                        logMsg["centering(min)"] = flowNet.module.center.min().item()
+                        logMsg["centering(min)"] = flowNet.module.center.min().item()
                     else:
-                        logMsg["centering(max)"] = flownet.center.max().item()
-                        logMsg["centering(min)"] = flownet.center.min().item()
-                        logMsg["centering(min)"] = flownet.center.min().item()
+                        logMsg["centering(max)"] = flowNet.center.max().item()
+                        logMsg["centering(min)"] = flowNet.center.min().item()
+                        logMsg["centering(min)"] = flowNet.center.min().item()
 
                 wandb.log(logMsg)
 
@@ -512,14 +505,15 @@ class FlowTrainer:
             input_z = torch.normal(mean = mean, std = std, size=(batch_size, sample_n, self.args.num_class)).cuda()
             approx21 = flowNet(input_z, feature, None, reverse=True)
             if len(self.args.gpuid) > 1:
-                approx21 = approx21 - flowNet.module.center
+                approx21_center = approx21 - flowNet.module.center
             else:
-                approx21 = approx21 - flowNet.center
+                approx21_center = approx21 - flowNet.center
             
             if centering:
+                approx21_center += (1 / self.args.num_class)
                 self.update_center(flowNet, approx21)
 
-            probs = torch.mean(approx21, dim=1, keepdim=False)
+            probs = torch.mean(approx21_center, dim=1, keepdim=False)
             
             if normalize:
                 probs = torch.tanh(probs)
@@ -527,10 +521,10 @@ class FlowTrainer:
                 probs = F.normalize(probs, dim=1, p=1)
             return probs
 
-    def testByFlow(self, epoch, net, flownet, test_loader, test_num = -1):
+    def testByFlow(self, epoch, net, flowNet, test_loader, test_num = -1):
         print("\n====Test====\n")
         net.eval()
-        flownet.eval()
+        flowNet.eval()
         total = 0
         # flow acc
         correct_flow = 0
@@ -549,12 +543,12 @@ class FlowTrainer:
                 inputs, targets = inputs.cuda(), targets.cuda()
 
                 # _, logits, feature = net(inputs, get_feature = True)
-                # outputs = self.predict(flownet, feature)
+                # outputs = self.predict(flowNet, feature)
 
                 with self.net_ema.average_parameters():
                     with self.flowNet_ema.average_parameters():
                         _, logits_ema, feature_ema = net(inputs, get_feature = True)
-                        outputs_ema = self.predict(flownet, feature_ema)
+                        outputs_ema = self.predict(flowNet, feature_ema)
                 
                 # logits = (logits + logits_ema) / 2  
                 # outputs = (outputs + outputs_ema) / 2
@@ -611,12 +605,12 @@ class FlowTrainer:
         return y_onehot
 
     ## Pseudo-label
-    def get_pseudo_label(self, net, flownet, inputs_u, inputs_u2, std = 0, updateCnetering = False):
+    def get_pseudo_label(self, net, flowNet, inputs_u, inputs_u2, std = 0, updateCnetering = False):
         _, outputs_u11, features_u11 = net(inputs_u, get_feature = True)
         _, outputs_u12, features_u12 = net(inputs_u2, get_feature = True)
         
-        flow_outputs_u11 = self.predict(flownet, features_u11, std, centering = (self.args.centering and updateCnetering))
-        flow_outputs_u12 = self.predict(flownet, features_u12, std, centering = False)
+        flow_outputs_u11 = self.predict(flowNet, features_u11, std, centering = (self.args.centering and updateCnetering))
+        flow_outputs_u12 = self.predict(flowNet, features_u12, std, centering = False)
         
         pu_net = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1)) / 2
         pu_flow = (flow_outputs_u11 + flow_outputs_u12) / 2
@@ -706,9 +700,9 @@ class FlowTrainer:
         # e = b.sum(dim=1)
         # return e
 
-    def log_prob(self, target, feature, flownet):
+    def log_prob(self, target, feature, flowNet):
         delta_p = torch.zeros(target.shape[0], target.shape[1], 1).cuda() 
-        approx21, delta_log_p2 = flownet(target, feature, delta_p)
+        approx21, delta_log_p2 = flowNet(target, feature, delta_p)
         
         approx2 = standard_normal_logprob(approx21).view(target.size()[0], -1).sum(1, keepdim=True)
         delta_log_p2 = delta_log_p2.view(target.size()[0], target.shape[1], 1).sum(1)
@@ -755,3 +749,48 @@ class FlowTrainer:
             flowNet.module.center = flowNet.module.center * self.center_momentum + batch_center * (1 - self.center_momentum)
         else:
             flowNet.center = flowNet.center * self.center_momentum + batch_center * (1 - self.center_momentum)
+
+
+    def log_big_loss(self, loss, label, label_o, feature, img, epoch, batch_idx):
+        print("epoch ", epoch)
+        print("batch_idx ", batch_idx)
+        print("loss : ", loss.size())
+        print("label : ", label.size())
+        print("label_o : ", label_o.size())
+        print("feature : ", feature.size())
+        print("img : ", img.size())
+        
+        loss_idx = loss.ge(-100)
+
+        bigger_loss = torch.masked_select(loss, loss_idx)
+        bigger_label = torch.masked_select(label, loss_idx)
+        bigger_label_o = torch.masked_select(label_o, loss_idx)
+        bigger_feature = torch.masked_select(feature, loss_idx)
+        bigger_img = torch.masked_select(img, loss_idx)
+        
+        self.log_file.write("\nepoch : {epoch} batch_idx {batch_idx}\n")
+        if bigger_loss.size()[0] == 0:
+            self.log_file.write("not bigger loss\n")
+            return
+        self.log_file.write('bigger_loss\n')
+        self.log_file.write(str(bigger_loss))
+        self.log_file.write('bigger_label\n')
+        self.log_file.write(str(bigger_label))
+        self.log_file.write('bigger_label_o\n')
+        self.log_file.write(str(bigger_label_o))
+        self.log_file.write('bigger_feature\n')
+        self.log_file.write(str(bigger_feature))
+
+        jsd_label = js_distance(label, label_o, self.args.num_class)
+        jsd_label_bigger = js_distance(bigger_label, bigger_label_o, self.args.num_class)
+
+        self.log_file.write("jsd_label : " + str(jsd_label) + "\n")
+        self.log_file.write("jsd_label_bigger : " + str(jsd_label_bigger) + "\n")
+
+        for idx in range(bigger_img.size()[0]):
+            img = bigger_img[idx].numpy()
+            save_image(img, model_save_loc + '/JSD_distribution/{epoch}_{batch_idx}_{idx}_img.png')
+            if idx > 3:
+                break
+        
+        

@@ -24,3 +24,9 @@ decay: 0.99
 sharpening: 'UNICON'
 Tu_warmup: 1.0
 Tu: 0.5
+
+# sharpening: 'DINO'
+# Tu_warmup: 0.03
+# Tu: 0.04
+
+flow_sp: True

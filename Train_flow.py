@@ -289,7 +289,7 @@ def load_model(model_save_loc, net, flowNet, flowTrainer, best=False):
     return
 
 def save_model(net, flowNet, epoch, acc = 0):
-    if epoch <args.warm_up:
+    if epoch < args.warm_up:
         model_name = 'Net_warmup.pth'
         model_name_flow = 'FlowNet_warmup.pth'
         model_name_ema = 'Net_warmup_ema.pth'
@@ -439,7 +439,7 @@ if __name__ == '__main__':
     net = create_model(args)
 
     # flow model
-    flowTrainer = FlowTrainer(args)
+    flowTrainer = FlowTrainer(args, model_save_loc)
     flowNet = flowTrainer.create_model()
 
     # gpus
