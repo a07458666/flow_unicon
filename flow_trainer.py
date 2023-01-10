@@ -191,7 +191,7 @@ class FlowTrainer:
 
                 ## updateCnetering
                 if self.args.centering:
-                    _, _ = self.get_pseudo_label(net1, flownet1, inputs_u, inputs_u2, std = self.args.pseudo_std, updateCnetering = True)   
+                    _, _ = self.get_pseudo_label(net1, flowNet1, inputs_u, inputs_u2, std = self.args.pseudo_std, updateCnetering = True)   
 
                 if not self.args.isRealTask:
                     labels_x_o = labels_x_o.cuda()
@@ -207,6 +207,7 @@ class FlowTrainer:
             ## Unsupervised Contrastive Loss
             f1, _ = net1(inputs_u3)
             f2, _ = net1(inputs_u4)
+
             features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
             loss_simCLR = self.contrastive_criterion(features)
 
@@ -225,7 +226,10 @@ class FlowTrainer:
             
             if self.args.lossType == "mix" or self.args.lossType == "ce":
                 ## Combined Loss
-                Lx, Lu, lamb = self.criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, self.warm_up, self.args.lambda_u, self.args.linear_u)
+                Lx, Lu, lamb = self.criterion(logits_x, mixed_target[:batch_size*2],
+                                              logits_u, mixed_target[batch_size*2:],
+                                              epoch+batch_idx/num_iter, self.warm_up,
+                                              self.args.lambda_u, self.args.linear_u)
                 
                 ## Regularization
                 prior = torch.ones(self.args.num_class)/self.args.num_class
@@ -239,11 +243,11 @@ class FlowTrainer:
 
             lamb_u = linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.linear_u, self.args.lambda_flow_u_warmup, self.args.lambda_flow_u)
             
-            loss_nll_x = -log_p2[:batch_size*2].mean()
-            loss_nll_u = -log_p2[batch_size*2:].mean()
+            loss_nll_x = -log_p2[:batch_size*2]
+            loss_nll_u = -log_p2[batch_size*2:]
 
             if self.args.split:
-                loss_nll = loss_nll_x + (lamb_u * loss_nll_u)
+                loss_nll = loss_nll_x.mean() + (lamb_u * loss_nll_u.mean())
             else:
                 log_p2[batch_size*2:] *= lamb_u
                 loss_nll = (-log_p2).mean()
@@ -277,8 +281,8 @@ class FlowTrainer:
                 logMsg["epoch"] = epoch
                 logMsg["lamb_Tu"] = lamb_Tu
                 
-                logMsg["loss/nll_x"] = loss_nll_x.item()
-                logMsg["loss/nll_u"] = loss_nll_u.item()
+                logMsg["loss/nll_x"] = loss_nll_x.mean().item()
+                logMsg["loss/nll_u"] = loss_nll_u.mean().item()
 
                 logMsg["loss/nll_x_max"] = loss_nll_x.max()
                 logMsg["loss/nll_x_min"] = loss_nll_x.min()
@@ -324,6 +328,10 @@ class FlowTrainer:
 
     ## Calculate JSD
     def Calculate_JSD(self, net1, flowNet1, net2, flowNet2, num_samples, eval_loader):  
+        net1.eval()
+        net2.eval()
+        flowNet1.eval()
+        flowNet2.eval()
         JSD   = torch.zeros(num_samples)    
         for batch_idx, (inputs, targets) in tqdm(enumerate(eval_loader)):
             inputs, targets = inputs.cuda(), targets.cuda()
@@ -331,14 +339,20 @@ class FlowTrainer:
 
             ## Get outputs of both network
             with torch.no_grad():
-                _, _, feature = net1(inputs, get_feature=True)
+                _, logits, feature = net1(inputs, get_feature = True)
                 out1 = self.predict(flowNet1, feature)
 
-                _, _, feature2 = net2(inputs, get_feature=True)
+                _, logits2, feature2 = net2(inputs, get_feature = True)
                 out2 = self.predict(flowNet2, feature2)
 
             ## Get the Prediction
-            out = (out1 + out2) / 2
+            if self.args.lossType == "ce":
+                out = (logits + logit2) / 2
+            elif self.args.lossType == "nll":
+                out = (out1 + out2) / 2
+            elif self.args.lossType == "mix":
+                out = (logits + logit2 + out1 + out2) / 4
+            
             ## Divergence clculator to record the diff. between ground truth and output prob. dist.  
             dist = js_distance(out, targets, self.args.num_class)
             JSD[int(batch_idx*batch_size):int((batch_idx+1)*batch_size)] = dist
