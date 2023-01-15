@@ -347,11 +347,11 @@ class FlowTrainer:
 
             ## Get the Prediction
             if self.args.lossType == "ce":
-                out = (logits + logit2) / 2
+                out = (torch.softmax(logits, dim=1) + torch.softmax(logits2, dim=1)) / 2
             elif self.args.lossType == "nll":
                 out = (out1 + out2) / 2
             elif self.args.lossType == "mix":
-                out = (logits + logit2 + out1 + out2) / 4
+                out = (torch.softmax(logits, dim=1) + torch.softmax(logits2, dim=1) + out1 + out2) / 4
             
             ## Divergence clculator to record the diff. between ground truth and output prob. dist.  
             dist = js_distance(out, targets, self.args.num_class)
@@ -393,24 +393,17 @@ class FlowTrainer:
         flowNet2.eval()
         
         total = 0
-        # flow acc
-        correct_flow1 = 0
-        prob_sum_flow1 = 0
 
         # flow acc
-        correct_flow2 = 0
-        prob_sum_flow2 = 0
+        correct_flow = 0
+        prob_sum_flow = 0
 
         # cross entropy acc
-        correct_ce1 = 0
-        prob_sum_ce1 = 0
+        correct_ce = 0
+        prob_sum_ce = 0
 
-        correct_ce2 = 0
-        prob_sum_ce2 = 0
-
-        # acc
-        correct = 0
-        prob_sum = 0
+        correct_mix = 0
+        prob_sum_mix = 0
 
         with torch.no_grad():
             for batch_idx, (inputs, targets) in tqdm(enumerate(test_loader)):
@@ -424,54 +417,56 @@ class FlowTrainer:
 
                 total += targets.size(0)
 
-                prob_ce1, predicted_ce1 = torch.max(logits1, 1)
-                prob_ce2, predicted_ce2 = torch.max(logits2, 1)
+                logits  = (torch.softmax(logits1, dim=1) + torch.softmax(logits2, dim=1)) / 2
+                outputs = (outputs1 + outputs2) / 2
 
-                prob_flow1, predicted_flow1 = torch.max(outputs1, 1)
-                prob_flow2, predicted_flow2 = torch.max(outputs2, 1)
+                prob_ce, predicted_ce = torch.max(logits, 1)
 
-                correct_ce1 += predicted_ce1.eq(targets).cpu().sum().item()  
-                prob_sum_ce1 += prob_ce1.cpu().sum().item()
+                prob_flow, predicted_flow = torch.max(outputs, 1)
 
-                correct_ce2 += predicted_ce2.eq(targets).cpu().sum().item()  
-                prob_sum_ce2 += prob_ce2.cpu().sum().item()
+                prob_mix, predicted_mix = torch.max(0.5 * logits + 0.5 * outputs, 1)
 
-                correct_flow1 += predicted_flow1.eq(targets).cpu().sum().item()  
-                prob_sum_flow1 += prob_flow1.cpu().sum().item()
+                correct_ce += predicted_ce.eq(targets).cpu().sum().item()  
+                prob_sum_ce += prob_ce.cpu().sum().item()
 
-                correct_flow2 += predicted_flow2.eq(targets).cpu().sum().item()  
-                prob_sum_flow2 += prob_flow2.cpu().sum().item()
+                correct_flow += predicted_flow.eq(targets).cpu().sum().item()  
+                prob_sum_flow += prob_flow.cpu().sum().item()
 
-                if self.args.lossType == "ce":
-                    outputs = (logits1 + logits2) / 2
-                elif self.args.lossType == "nll":
-                    outputs = (outputs1 + outputs2) / 2
-                elif self.args.lossType == "mix":
-                    outputs = (logits1 + logits2 + outputs1 + outputs2) / 4
-                
-                prob, predicted = torch.max(outputs, 1)
-                correct += predicted.eq(targets).cpu().sum().item()
-                prob_sum += prob.cpu().sum().item()
+                correct_mix += predicted_mix.eq(targets).cpu().sum().item()  
+                prob_sum_mix += prob_mix.cpu().sum().item()
 
                 if test_num > 0 and total >= test_num:
                     break
 
-        acc_ce1 = 100.*correct_ce1/total
-        confidence_ce1 = prob_sum_ce1/total
+        acc_ce = 100.*correct_ce/total
+        confidence_ce = prob_sum_ce/total
+                
+        acc_flow = 100.*correct_flow/total
+        confidence_flow = prob_sum_flow/total
 
-        acc_ce2 = 100.*correct_ce2/total
-        confidence_ce2 = prob_sum_ce2/total                    
+        acc_mix = 100.*correct_mix/total
+        confidence_mix = prob_sum_mix/total
 
-        acc_flow1 = 100.*correct_flow1/total
-        confidence_flow1 = prob_sum_flow1/total
-
-        acc_flow2 = 100.*correct_flow2/total
-        confidence_flow2 = prob_sum_flow2/total
-
-        acc = 100.*correct/total
-        confidence = prob_sum/total
+        if self.args.lossType == "ce":
+            acc = acc_ce
+            confidence = confidence_ce
+        elif self.args.lossType == "nll":
+            acc = acc_flow
+            confidence = confidence_flow
+        elif self.args.lossType == "mix":
+            acc = acc_mix
+            confidence = confidence_mix
         
         print("\n| Test Epoch #%d\t Accuracy: %.2f%%\t Condifence: %.2f%%\n" %(epoch, acc, confidence))
+        
+        ## wandb
+        if (wandb != None):
+            logMsg = {}
+            logMsg["epoch"] = epoch
+            logMsg["accHead/test_flow"] = acc_flow
+            logMsg["accHead/test_resnet"] = acc_ce
+            logMsg["accHead/test_mix"] = acc_mix
+            wandb.log(logMsg)
 
         return acc, confidence
 

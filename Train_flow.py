@@ -487,29 +487,28 @@ if __name__ == '__main__':
             run(2, net2, flowNet2, net1, flowNet1, optimizer2, optimizerFlow2)
         
         ## Acc
-        acc_flow, confidence_flow = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, test_loader)
+        acc, confidence = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, test_loader)
         
         ## Acc(Train Dataset)
-        print('\n =====Noise Acc====')
-        noise_valloader = loader.run(0, 'val_noise')
-        acc_flow_n, confidence_flow_n = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, noise_valloader, test_num = 5000)
-        print('\n ==================')
+        # print('\n =====Noise Acc====')
+        # noise_valloader = loader.run(0, 'val_noise')
+        # acc_n, confidence_n = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, noise_valloader, test_num = 5000)
+        # print('\n ==================')
         
         scheduler1.step()
         schedulerFlow1.step()
         scheduler2.step()
         schedulerFlow2.step()
 
-        acc = acc_flow
         ## wandb
         if (wandb != None):
             logMsg = {}
             logMsg["epoch"] = epoch
             logMsg["runtime"] = time.time() - startTime
-            logMsg["acc/test"] = acc_flow
-            logMsg["confidence score"] = confidence_flow
-            logMsg["acc/noise_val"] = acc_flow_n
-            logMsg["confidence score(noise)"] = confidence_flow_n
+            logMsg["acc/test"] = acc
+            logMsg["confidence score"] = confidence
+            # logMsg["acc/noise_val"] = acc_n
+            # logMsg["confidence score(noise)"] = confidence_n
             wandb.log(logMsg)
         
         if acc > best_acc:
