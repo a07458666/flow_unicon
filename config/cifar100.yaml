@@ -9,7 +9,6 @@ warm_up: 30
 num_samples: 50000
 flow_modules: 64-64-64-64
 weight_decay: 5e-4
-w_ce: False
 centering: False
 cond_size: 512
 center_momentum: 0.8

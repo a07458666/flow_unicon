@@ -6,4 +6,4 @@ torch
 torchnet
 torchvision
 tqdm
-
+sync_batchnorm

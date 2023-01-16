@@ -23,6 +23,9 @@ from flow_trainer import FlowTrainer
 from tqdm import tqdm
 from config import argumentParse
 
+from sync_batchnorm import convert_model
+
+
 try:
     import wandb
 except ImportError:
@@ -419,6 +422,10 @@ if __name__ == '__main__':
         flowNet1 = nn.DataParallel(flowNet1)
         net2 = nn.DataParallel(net2)
         flowNet2 = nn.DataParallel(flowNet2)
+        net1 = convert_model(net1)
+        net2 = convert_model(net2)
+        flowNet1 = convert_model(flowNet1)
+        flowNet2 = convert_model(flowNet2)
 
     cudnn.benchmark = True
 
