@@ -18,3 +18,4 @@ T: 0.5
 Tf_warmup: 1.0
 Tf: 0.5
 cond_size: 512
+flow_sp: False
