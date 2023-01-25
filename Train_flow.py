@@ -25,7 +25,6 @@ from config import argumentParse
 
 from sync_batchnorm import convert_model
 
-
 try:
     import wandb
 except ImportError:
@@ -422,10 +421,10 @@ if __name__ == '__main__':
         flowNet1 = nn.DataParallel(flowNet1)
         net2 = nn.DataParallel(net2)
         flowNet2 = nn.DataParallel(flowNet2)
-        net1 = convert_model(net1)
-        net2 = convert_model(net2)
-        flowNet1 = convert_model(flowNet1)
-        flowNet2 = convert_model(flowNet2)
+        # net1 = convert_model(net1)
+        # net2 = convert_model(net2)
+        # flowNet1 = convert_model(flowNet1)
+        # flowNet2 = convert_model(flowNet2)
 
     cudnn.benchmark = True
 
@@ -440,10 +439,10 @@ if __name__ == '__main__':
         optimizerFlow2 = optim.AdamW(flowNet2.parameters(), lr=args.lr_f)
 
     if args.dataset=='TinyImageNet':
-        scheduler1 = optim.lr_scheduler.ExponentialLR(optimizer, 0.98)
-        schedulerFlow1 = optim.lr_scheduler.ExponentialLR(optimizerFlow, 0.98)
-        scheduler2 = optim.lr_scheduler.ExponentialLR(optimizer, 0.98)
-        schedulerFlow2 = optim.lr_scheduler.ExponentialLR(optimizerFlow, 0.98)
+        scheduler1 = optim.lr_scheduler.ExponentialLR(optimizer1, 0.98)
+        schedulerFlow1 = optim.lr_scheduler.ExponentialLR(optimizerFlow1, 0.98)
+        scheduler2 = optim.lr_scheduler.ExponentialLR(optimizer2, 0.98)
+        schedulerFlow2 = optim.lr_scheduler.ExponentialLR(optimizerFlow2, 0.98)
     else:
         scheduler1 = optim.lr_scheduler.CosineAnnealingLR(optimizer1, args.num_epochs, args.lr / 1e2)
         schedulerFlow1 = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow1, args.num_epochs, args.lr_f / 1e2)

@@ -13,7 +13,7 @@ alpha: 0.5
 flow_modules: 160-160-160-160
 weight_decay: 5e-4
 decay: 0.99
-lambda_u: 45
+lambda_u: 50
 linear_u: 16
 cond_size: 512 # 2048/ 4
 
@@ -26,3 +26,4 @@ T: 0.2
 sharpening: 'UNICON'
 Tf_warmup: 1.0
 Tf: 0.5
+flow_sp: False
