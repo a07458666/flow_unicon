@@ -314,7 +314,7 @@ class InceptionResNetV2(nn.Module):
         x = self.avgpool_1a(features)
         x = x.view(x.size(0), -1)
         # x = self.feature_head(x)
-        x = F.avg_pool1d(x, 4)
+        x = F.avg_pool1d(x.unsqueeze(1), 4)
         return x
 
     def forward(self, input, get_feature = False):

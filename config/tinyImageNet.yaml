@@ -25,5 +25,5 @@ T: 0.2
 
 sharpening: 'UNICON'
 Tf_warmup: 1.0
-Tf: 0.5
+Tf: 0.7
 flow_sp: False

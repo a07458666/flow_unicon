@@ -8,14 +8,14 @@ batch_size: 32
 warm_up: 10
 lambda_p: 50
 alpha: 0.5
-flow_modules: 256-256-256-256
+flow_modules: 160-160-160-160
 cond_size: 384  #1536 / 4
 isRealTask: True
 num_samples: 65944
 weight_decay: 1e-3
-flow_sp: False
 clip_grad: True
 
+centering: True
 center_momentum: 0.8
 decay: 0.99
 
@@ -26,3 +26,4 @@ Tf_warmup: 1.0
 Tf: 0.7
 
 pretrained: True
+flow_sp: False
