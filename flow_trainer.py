@@ -178,11 +178,11 @@ class FlowTrainer:
                 px_net_2, px_flow_2 = self.get_pseudo_label(net2, flowNet2, inputs_x2, inputs_x2, std = self.args.pseudo_std)
 
                 if self.args.lossType == "ce":
-                    px = (px_net_1 + px_net_2) / 2
+                    px = px_net_1
                 elif self.args.lossType == "nll":
-                    px = (px_flow_1 + px_flow_2) / 2
+                    px = px_flow_1
                 elif self.args.lossType == "mix":
-                    px = (px_net_1 + px_net_2 + px_flow_1 + px_flow_2) / 4
+                    px = (px_net_1 + px_flow_1) / 2
 
                 px_mix = w_x*labels_x + (1-w_x)*px
 
@@ -219,7 +219,7 @@ class FlowTrainer:
             _, logits, flow_feature = net1(mixed_input, get_feature = True) # add flow_feature
 
             # Regularization feature var
-            reg_f_var_loss = torch.clamp(1-torch.sqrt(flow_feature.var(dim=0) + 1e-10), min=0).mean()
+            # reg_f_var_loss = torch.clamp(1-torch.sqrt(flow_feature.var(dim=0) + 1e-10), min=0).mean()
             
             logits_x = logits[:batch_size*2]
             logits_u = logits[batch_size*2:] 
@@ -252,7 +252,7 @@ class FlowTrainer:
                 log_p2[batch_size*2:] *= lamb_u
                 loss_nll = (-log_p2).mean()
 
-            loss_flow = self.args.lambda_c * loss_simCLR + (self.args.lambda_f * loss_nll) + reg_f_var_loss
+            loss_flow = self.args.lambda_c * loss_simCLR + (self.args.lambda_f * loss_nll) #+ reg_f_var_loss
 
             ## Total Loss
             if self.args.lossType == "mix":
@@ -292,7 +292,7 @@ class FlowTrainer:
                 logMsg["loss/nll_u_var"] = loss_nll_u.var()
 
                 logMsg["loss/simCLR"] = loss_simCLR.item()
-                logMsg["loss/reg_f_var_loss"] = reg_f_var_loss.item()
+                # logMsg["loss/reg_f_var_loss"] = reg_f_var_loss.item()
 
                 logMsg["feature_grad/mean"] = flow_feature.grad.mean().item()
                 logMsg["feature_grad/max"] = flow_feature.grad.max().item()

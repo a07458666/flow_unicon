@@ -40,7 +40,7 @@ transform_weak_100_compose = transforms.Compose(
 transform_strong_100_compose = transforms.Compose(
     [
         transforms.RandomCrop(64),
-        transforms.ColorJitter(brightness=0.3, contrast=0.35, saturation=0.4, hue=0.07),
+        # transforms.ColorJitter(brightness=0.3, contrast=0.35, saturation=0.4, hue=0.07),
         transforms.RandomHorizontalFlip(),
         CIFAR10Policy(),
         transforms.ToTensor(),
