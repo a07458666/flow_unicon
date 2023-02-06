@@ -175,7 +175,7 @@ class FlowTrainer:
 
                 ## Label refinement
                 px_net_1, px_flow_1 = self.get_pseudo_label(net1, flowNet1, inputs_x, inputs_x, std = self.args.pseudo_std)
-                px_net_2, px_flow_2 = self.get_pseudo_label(net2, flowNet2, inputs_x2, inputs_x2, std = self.args.pseudo_std)
+                # px_net_2, px_flow_2 = self.get_pseudo_label(net2, flowNet2, inputs_x2, inputs_x2, std = self.args.pseudo_std)
 
                 if self.args.lossType == "ce":
                     px = px_net_1
