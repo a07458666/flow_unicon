@@ -23,8 +23,6 @@ from flow_trainer import FlowTrainer
 from tqdm import tqdm
 from config import argumentParse
 
-from sync_batchnorm import convert_model
-
 try:
     import wandb
 except ImportError:
