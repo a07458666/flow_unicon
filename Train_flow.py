@@ -520,6 +520,6 @@ if __name__ == '__main__':
         if acc > best_acc:
             save_model(net1, flowNet1, net2, flowNet2, epoch, acc)
             best_acc = acc
-        if acc < best_acc - 10.:
-            print("early stop")
-            exit()
+        # if acc < best_acc - 10.:
+        #     print("early stop")
+        #     exit()
