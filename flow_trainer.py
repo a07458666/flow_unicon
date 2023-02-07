@@ -81,16 +81,24 @@ class FlowTrainer:
             loss_nll, log_p2 = self.log_prob(flow_labels, feature_flow, flowNet)
             # == flow end ===
 
-            if self.args.lossType == "mix" or self.args.lossType == "ce":
-                loss_ce = self.CEloss(outputs, labels)
-                L = loss_ce
-                if self.args.noise_mode=='asym':     # Penalize confident prediction for asymmetric noise
-                    penalty = self.conf_penalty(outputs)
-                    L += penalty
-                if self.args.lossType == "mix":
-                    L += (self.args.lambda_f * loss_nll)
-            else:
-                L = (self.args.lambda_f * loss_nll)
+            loss_ce = self.CEloss(outputs, labels)
+            penalty = self.conf_penalty(outputs)
+
+            if self.args.lossType == "mix":
+                if self.args.noise_mode=='asym': # Penalize confident prediction for asymmetric noise
+                    L = loss_ce + penalty + (self.args.lambda_f * loss_nll)
+                else:
+                    L = loss_ce + (self.args.lambda_f * loss_nll)
+            elif self.args.lossType == "ce":
+                if self.args.noise_mode=='asym': # Penalize confident prediction for asymmetric noise
+                    L = loss_ce + penalty
+                else:
+                    L = loss_ce
+            elif self.args.lossType == "nll":
+                if self.args.noise_mode=='asym':
+                    L = penalty + (self.args.lambda_f * loss_nll)
+                else:
+                    L = (self.args.lambda_f * loss_nll)
 
             optimizer.zero_grad()
             optimizerFlow.zero_grad()
@@ -133,10 +141,10 @@ class FlowTrainer:
 
         for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x, labels_x_o) in enumerate(labeled_trainloader): 
             try:
-                inputs_u, inputs_u2, inputs_u3, inputs_u4, labels_u_o = unlabeled_train_iter.next()
+                inputs_u, inputs_u2, inputs_u3, inputs_u4, labels_u_o = next(unlabeled_train_iter)
             except:
                 unlabeled_train_iter = iter(unlabeled_trainloader)
-                inputs_u, inputs_u2, inputs_u3, inputs_u4, labels_u_o = unlabeled_train_iter.next()
+                inputs_u, inputs_u2, inputs_u3, inputs_u4, labels_u_o = next(unlabeled_train_iter)
             
             batch_size = inputs_x.size(0)
 
@@ -217,10 +225,7 @@ class FlowTrainer:
             mixed_input, mixed_target = mix_match(all_inputs, all_targets, self.args.alpha)
                     
             _, logits, flow_feature = net1(mixed_input, get_feature = True) # add flow_feature
-
-            # Regularization feature var
-            # reg_f_var_loss = torch.clamp(1-torch.sqrt(flow_feature.var(dim=0) + 1e-10), min=0).mean()
-            
+        
             logits_x = logits[:batch_size*2]
             logits_u = logits[batch_size*2:] 
             
@@ -252,15 +257,15 @@ class FlowTrainer:
                 log_p2[batch_size*2:] *= lamb_u
                 loss_nll = (-log_p2).mean()
 
-            loss_flow = self.args.lambda_c * loss_simCLR + (self.args.lambda_f * loss_nll) #+ reg_f_var_loss
+            loss_flow = (self.args.lambda_f * loss_nll)
 
             ## Total Loss
             if self.args.lossType == "mix":
-                loss = loss_flow + loss_ce
+                loss = loss_flow + loss_ce + (self.args.lambda_c * loss_simCLR)
             elif self.args.lossType == "ce":
-                loss = loss_ce
+                loss = loss_ce + (self.args.lambda_c * loss_simCLR)
             elif self.args.lossType == "nll":
-                loss = loss_flow
+                loss = loss_flow + (self.args.lambda_c * loss_simCLR)
 
             # Compute gradient and Do SGD step
             optimizer.zero_grad()
@@ -292,7 +297,6 @@ class FlowTrainer:
                 logMsg["loss/nll_u_var"] = loss_nll_u.var()
 
                 logMsg["loss/simCLR"] = loss_simCLR.item()
-                # logMsg["loss/reg_f_var_loss"] = reg_f_var_loss.item()
 
                 logMsg["feature_grad/mean"] = flow_feature.grad.mean().item()
                 logMsg["feature_grad/max"] = flow_feature.grad.max().item()
