@@ -8,3 +8,4 @@ torchvision
 tqdm
 torch-ema
 torchdiffeq
+wandb
