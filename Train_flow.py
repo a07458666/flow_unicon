@@ -398,7 +398,7 @@ if __name__ == '__main__':
     ## wandb
     if (wandb != None):
         if args.dataset == 'cifar10' or args.dataset == 'cifar100':
-            project_name = "FlowUNICON_Re"
+            project_name = "FlowUNICON"
         else:
             project_name = "FlowUNICON_" + args.dataset
         wandb.init(project=project_name, entity="andy-su", name=folder)
