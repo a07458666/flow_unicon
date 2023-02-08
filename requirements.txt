@@ -9,3 +9,6 @@ tqdm
 torch-ema
 torchdiffeq
 wandb
+scikit-learn
+scipy
+matplotlib
