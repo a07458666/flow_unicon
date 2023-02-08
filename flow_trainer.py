@@ -389,6 +389,86 @@ class FlowTrainer:
                 probs = F.normalize(probs, dim=1, p=1)
             return probs
 
+    def testSTD(self, epoch, net1, flowNet1, net2, flowNet2, test_loader, sample_std = 0.2):
+        print("\n====TestSTD====\n")
+        net1.eval()
+        flowNet1.eval()
+        net2.eval()
+        flowNet2.eval()
+        
+        total = 0
+
+        # flow acc
+        correct_flow = 0
+        prob_sum_flow = 0
+
+        # cross entropy acc
+        correct_ce = 0
+        prob_sum_ce = 0
+
+        correct_mix = 0
+        prob_sum_mix = 0
+
+        with torch.no_grad():
+            for batch_idx, (inputs, targets) in tqdm(enumerate(test_loader)):
+                inputs, targets = inputs.cuda(), targets.cuda()
+
+                _, logits1, feature1 = net1(inputs, get_feature = True)
+                outputs1 = self.predict(flowNet1, feature1, std = sample_std)
+
+                _, logits2, feature2 = net2(inputs, get_feature = True)
+                outputs2 = self.predict(flowNet2, feature2,  std = sample_std)
+
+                total += targets.size(0)
+
+                logits  = (torch.softmax(logits1, dim=1) + torch.softmax(logits2, dim=1)) / 2
+                outputs = (outputs1 + outputs2) / 2
+
+                prob_ce, predicted_ce = torch.max(logits, 1)
+
+                prob_flow, predicted_flow = torch.max(outputs, 1)
+
+                prob_mix, predicted_mix = torch.max(0.5 * logits + 0.5 * outputs, 1)
+
+                correct_ce += predicted_ce.eq(targets).cpu().sum().item()  
+                prob_sum_ce += prob_ce.cpu().sum().item()
+
+                correct_flow += predicted_flow.eq(targets).cpu().sum().item()  
+                prob_sum_flow += prob_flow.cpu().sum().item()
+
+                correct_mix += predicted_mix.eq(targets).cpu().sum().item()  
+                prob_sum_mix += prob_mix.cpu().sum().item()
+
+        acc_ce = 100.*correct_ce/total
+        confidence_ce = prob_sum_ce/total
+                
+        acc_flow = 100.*correct_flow/total
+        confidence_flow = prob_sum_flow/total
+
+        acc_mix = 100.*correct_mix/total
+        confidence_mix = prob_sum_mix/total
+
+        if self.args.lossType == "ce":
+            acc = acc_ce
+            confidence = confidence_ce
+        elif self.args.lossType == "nll":
+            acc = acc_flow
+            confidence = confidence_flow
+        elif self.args.lossType == "mix":
+            acc = acc_mix
+            confidence = confidence_mix
+        
+        print("\n| Test Epoch #%d\t STD:%f\t Accuracy: %.2f%%\t Condifence: %.2f%%\n" %(epoch, sample_std, acc, confidence))
+        
+        ## wandb
+        if (wandb != None):
+            logMsg = {}
+            logMsg["epoch"] = epoch
+            logMsg["flow_distribution/Acc(STD:" + str(sample_std) +  ")"] = acc
+            logMsg["flow_distribution/Confidence(STD:" + str(sample_std) +  ")"] = confidence
+            wandb.log(logMsg)
+        return 
+
     def testByFlow(self, epoch, net1, flowNet1, net2, flowNet2, test_loader, test_num = -1):
         print("\n====Test====\n")
         net1.eval()

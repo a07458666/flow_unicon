@@ -383,7 +383,7 @@ if __name__ == '__main__':
     ## wandb
     if (wandb != None):
         if args.dataset == 'cifar10' or args.dataset == 'cifar100':
-            project_name = "FlowUNICON"
+            project_name = "FlowUNICON_Re"
         else:
             project_name = "FlowUNICON_" + args.dataset
         wandb.init(project=project_name, entity="andy-su", name=folder)
@@ -492,6 +492,9 @@ if __name__ == '__main__':
         
         ## Acc
         acc, confidence = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, test_loader)
+        if args.testSTD:
+            for test_std in [0.0, 0.2, 0.5, 0.8, 1.0]:
+                flowTrainer.testSTD(epoch, net1, flowNet1, net2, flowNet2, test_loader, sample_std = test_std)
         
         ## Acc(Train Dataset)
         # print('\n =====Noise Acc====')
