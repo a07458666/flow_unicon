@@ -55,7 +55,6 @@ def argumentParse(input_args = None):
     parser.add_argument('--warm_up', default=10, type=int)
     parser.add_argument('--num_samples', default=50000, type=int)
     parser.add_argument('--clip_grad', default=True, help = 'cliping grad')
-    parser.add_argument('--pretrained', action='store_true', help = 'pretrained(Clothing1M)')
     parser.add_argument('--split', action='store_true', help = 'split flow loss to x, u')
     parser.add_argument('--cond_size', default=128, type=int)
     parser.add_argument('--isRealTask', default=False, type=bool, help='')
@@ -69,6 +68,7 @@ def argumentParse(input_args = None):
     parser.add_argument('--optimizer', default="SGD", type=str, choices=['AdamW', 'SGD'], help = 'flow optimizer ')
     parser.add_argument('--warmup_mixup', default=False, type=bool, help = 'warmup use mixup')
     parser.add_argument('--testSTD', default=False, type=bool, help = 'test acc std 0.2~1.0')
+    parser.add_argument('--jumpRestart', default=False, type=bool, help = 'jumpRestart webvision')
 
     # Flow hyperparameters
     parser.add_argument('--flow_modules', default="8-8-8-8", type=str)
