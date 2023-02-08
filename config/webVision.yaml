@@ -1,10 +1,10 @@
-data_path: '../../webVision/'
+data_path: '../../dataset/webVision/'
 dataset: 'WebVision'
-num_epochs: 100
+num_epochs: 120
 num_class: 50
 lr: 0.01
 lr_f: 2e-5
-batch_size: 32
+batch_size: 24
 warm_up: 10
 lambda_p: 50
 alpha: 0.5
@@ -12,7 +12,7 @@ flow_modules: 160-160-160-160
 cond_size: 384  #1536 / 4
 isRealTask: True
 num_samples: 65944
-weight_decay: 1e-3
+weight_decay: 1e-4
 clip_grad: True
 
 centering: True
@@ -25,5 +25,5 @@ sharpening: 'UNICON'
 Tf_warmup: 1.0
 Tf: 0.7
 
-pretrained: True
 flow_sp: False
+jumpRestart: True

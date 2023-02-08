@@ -330,6 +330,21 @@ def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow):
 
     flowTrainer.train(epoch, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
 
+    def manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, init_lr, init_flow_lr, mid_warmup = 25):
+        lr=init_lr
+        lr_flow=init_flow_lr
+        if epoch >= 60 or (epoch+1)%mid_warmup==0:
+            lr /= 10
+            lr_flow /= 10
+        for param_group in optimizer1.param_groups:
+            param_group['lr'] = lr       
+        for param_group in optimizer2.param_groups:
+            param_group['lr'] = lr 
+        for param_group in optimizerFlow1.param_groups:
+            param_group['lr'] = lr_flow       
+        for param_group in optimizerFlow2.param_groups:
+            param_group['lr'] = lr_flow  
+
 if __name__ == '__main__':
     ## Arguments to pass 
     args = argumentParse()
@@ -468,13 +483,18 @@ if __name__ == '__main__':
 
     best_acc = 0
 
+    if args.dataset=='WebVision':
+        mid_warmup = 25
+
     ## Warmup and SSL-Training 
     for epoch in range(start_epoch,args.num_epochs+1):
         startTime = time.time() 
         test_loader = loader.run(0, 'val')
         eval_loader = loader.run(0, 'eval_train')
         warmup_trainloader = loader.run(0,'warmup')
-            
+        
+        if args.dataset=='WebVision':
+            manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, args.lr, args.lr_f, mid_warmup)
         print("Data Size : ", len(warmup_trainloader.dataset))
         ## Warmup Stage 
         if epoch<args.warm_up:       
@@ -485,7 +505,15 @@ if __name__ == '__main__':
 
             print('\nWarmup Model Net 2')
             flowTrainer.warmup_standard(epoch, net2, flowNet2, optimizer2, optimizerFlow2, warmup_trainloader)   
-        
+        ## Jump-Restart
+        elif args.jumpRestart and (epoch+1) % mid_warmup == 0:
+            manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, args.lr, args.lr_f, mid_warmup)
+
+            warmup_trainloader = loader.run(0.5, 'warmup')
+            print('Mid-training Warmup Net1')
+            flowTrainer.warmup_standard(epoch, net1, flowNet1, optimizer1, optimizerFlow1, warmup_trainloader)   
+            print('\nMid-training Warmup Net2')
+            flowTrainer.warmup_standard(epoch, net2, flowNet2, optimizer2, optimizerFlow2, warmup_trainloader)   
         else:
             run(1, net1, flowNet1, net2, flowNet2, optimizer1, optimizerFlow1)
             run(2, net2, flowNet2, net1, flowNet1, optimizer2, optimizerFlow2)
