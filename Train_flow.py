@@ -525,6 +525,10 @@ if __name__ == '__main__':
         acc, confidence = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, test_loader)
         if args.dataset == 'WebVision':
             imagenet_acc, imagenet_confidence = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, imagenet_valloader)
+        if args.testSTD:
+            for test_std in [0.0, 0.2, 0.5, 0.8, 1.0]:
+                flowTrainer.testSTD(epoch, net1, flowNet1, net2, flowNet2, test_loader, sample_std = test_std)
+
         ## Acc(Train Dataset)
         # print('\n =====Noise Acc====')
         # noise_valloader = loader.run(0, 'val_noise')

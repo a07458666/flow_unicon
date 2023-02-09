@@ -67,6 +67,7 @@ def argumentParse(input_args = None):
     parser.add_argument('--sharpening', default="UNICON", type=str, choices=['DINO', 'UNICON'], help = 'sharpening method')
     parser.add_argument('--optimizer', default="SGD", type=str, choices=['AdamW', 'SGD'], help = 'flow optimizer ')
     parser.add_argument('--warmup_mixup', default=False, type=bool, help = 'warmup use mixup')
+    parser.add_argument('--testSTD', default=False, type=bool, help = 'test acc std 0.2~1.0')
     parser.add_argument('--jumpRestart', default=False, type=bool, help = 'jumpRestart webvision')
 
     # Flow hyperparameters
