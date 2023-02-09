@@ -8,8 +8,8 @@ batch_size: 24
 warm_up: 10
 lambda_p: 50
 alpha: 0.5
-flow_modules: 160-160-160-160
-cond_size: 384  #1536 / 4
+flow_modules: 256-256-256-256
+cond_size: 384  #384 = 1536 / 4
 isRealTask: True
 num_samples: 65944
 weight_decay: 1e-4

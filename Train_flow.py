@@ -143,7 +143,7 @@ def logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloa
     origin_prob =  labeled_trainloader.dataset.origin_prob
     labeled_prob = [origin_prob[i] for i in labeled_idx]
     unlabeled_prob = [origin_prob[i] for i in unlabeled_idx]
-    sample_ratio = torch.sum(prob<threshold).item()/args.num_samples
+    sample_ratio = torch.sum(torch.from_numpy(origin_prob)<threshold).item()/args.num_samples
 
     # draw JSD dis
     plt.clf()
@@ -330,20 +330,20 @@ def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow):
 
     flowTrainer.train(epoch, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
 
-    def manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, init_lr, init_flow_lr, mid_warmup = 25):
-        lr=init_lr
-        lr_flow=init_flow_lr
-        if epoch >= 60 or (epoch+1)%mid_warmup==0:
-            lr /= 10
-            lr_flow /= 10
-        for param_group in optimizer1.param_groups:
-            param_group['lr'] = lr       
-        for param_group in optimizer2.param_groups:
-            param_group['lr'] = lr 
-        for param_group in optimizerFlow1.param_groups:
-            param_group['lr'] = lr_flow       
-        for param_group in optimizerFlow2.param_groups:
-            param_group['lr'] = lr_flow  
+def manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, init_lr, init_flow_lr, mid_warmup = 25):
+    lr=init_lr
+    lr_flow=init_flow_lr
+    if epoch >= 60 or (epoch+1)%mid_warmup==0:
+        lr /= 10
+        lr_flow /= 10
+    for param_group in optimizer1.param_groups:
+        param_group['lr'] = lr       
+    for param_group in optimizer2.param_groups:
+        param_group['lr'] = lr 
+    for param_group in optimizerFlow1.param_groups:
+        param_group['lr'] = lr_flow       
+    for param_group in optimizerFlow2.param_groups:
+        param_group['lr'] = lr_flow  
 
 if __name__ == '__main__':
     ## Arguments to pass 
@@ -483,7 +483,7 @@ if __name__ == '__main__':
 
     best_acc = 0
 
-    if args.dataset=='WebVision':
+    if args.jumpRestart:
         mid_warmup = 25
 
     ## Warmup and SSL-Training 
@@ -492,9 +492,12 @@ if __name__ == '__main__':
         test_loader = loader.run(0, 'val')
         eval_loader = loader.run(0, 'eval_train')
         warmup_trainloader = loader.run(0,'warmup')
+
+        if args.dataset == 'WebVision':
+            imagenet_valloader = loader.run(0.5, 'imagenet')
         
         if args.dataset=='WebVision':
-            manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, args.lr, args.lr_f, mid_warmup)
+            manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, args.lr, args.lr_f)
         print("Data Size : ", len(warmup_trainloader.dataset))
         ## Warmup Stage 
         if epoch<args.warm_up:       
@@ -520,7 +523,8 @@ if __name__ == '__main__':
         
         ## Acc
         acc, confidence = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, test_loader)
-        
+        if args.dataset == 'WebVision':
+            imagenet_acc, imagenet_confidence = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, imagenet_valloader)
         ## Acc(Train Dataset)
         # print('\n =====Noise Acc====')
         # noise_valloader = loader.run(0, 'val_noise')
@@ -539,8 +543,9 @@ if __name__ == '__main__':
             logMsg["runtime"] = time.time() - startTime
             logMsg["acc/test"] = acc
             logMsg["confidence score"] = confidence
-            # logMsg["acc/noise_val"] = acc_n
-            # logMsg["confidence score(noise)"] = confidence_n
+            if args.dataset == 'WebVision':
+                logMsg["ImageNet/acc"] = acc
+                logMsg["ImageNet/confidence score"] = confidence
             wandb.log(logMsg)
         
         if acc > best_acc:
