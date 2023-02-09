@@ -222,97 +222,37 @@ def print_label_status(targets_x, targets_u, labels_x_o, labels_u_o, batch_idx):
         logMsg["label_count/target_labels_x"] =  max(target_labels_x)
         wandb.log(logMsg)
 
-def load_model(model_save_loc, net1, flowNet1, net2, flowNet2, best=False):
-    if best:
-        model_name_1 = 'Net_1.pth'
-        model_name_flow_1 = 'FlowNet_1.pth'
-        model_name_2 = 'Net_2.pth'
-        model_name_flow_2 = 'FlowNet_2.pth'
-    else:
-        model_name_1 = 'Net_warmup_1.pth'
-        model_name_flow_1 = 'FlowNet_warmup_1.pth'
-        model_name_2 = 'Net_warmup_2.pth'
-        model_name_flow_2 = 'FlowNet_warmup_2.pth'
-
+def load_model(path, net, optimizer, scheduler):
     device = torch.device('cuda', torch.cuda.current_device())
-    net1.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_1), map_location=device)['net'])
-    flowNet1.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_1), map_location=device)['net'])
+    net_pth = torch.load(path, map_location=device)
+    net.load_state_dict(net_pth['net'])
+    optimizer.load_state_dict(net_pth['optimizer'])
+    scheduler.load_state_dict(net_pth['scheduler'])
 
-    net2.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_2), map_location=device)['net'])
-    flowNet2.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_2), map_location=device)['net'])
+    model_epoch = net_pth['epoch']
+    return model_epoch
 
-    return
 
-def save_model(net1, flowNet1, net2, flowNet2, epoch, acc = 0):
-    if epoch <args.warm_up:
-        model_name_1 = 'Net_warmup_1.pth'
-        model_name_flow_1 = 'FlowNet_warmup_1.pth'
-        model_name_2 = 'Net_warmup_2.pth'
-        model_name_flow_2 = 'FlowNet_warmup_2.pth'
+def save_model(path, net, optimizer, scheduler, acc):
+    if len(args.gpuid) > 1:
+        net_state_dict = net.module.state_dict()
     else:
-        model_name_1 = 'Net_1.pth'
-        model_name_flow_1 = 'FlowNet_1.pth'
-        model_name_2 = 'Net_2.pth'
-        model_name_flow_2 = 'FlowNet_2.pth'
+        net_state_dict = net.state_dict()
 
-    print("Save the Model-----")
-    checkpoint_1 = {
-        'net': net1.state_dict(),
-        'Model_number': 1,
+    checkpoint = {
+        'net': net_state_dict,
+        'optimizer': optimizer.state_dict(),
+        'scheduler': scheduler.state_dict(),
         'Noise_Ratio': args.ratio,
-        'Loss Function': 'CrossEntropyLoss',
         'Optimizer': 'SGD',
         'Noise_mode': args.noise_mode,
         'Accuracy': acc,
-        'Pytorch version': '1.4.0',
         'Dataset': args.dataset,
         'Batch Size': args.batch_size,
         'epoch': epoch,
     }
-
-    checkpoint_flow_1 = {
-        'net': flowNet1.state_dict(),
-        'Model_number': 2,
-        'Noise_Ratio': args.ratio,
-        'Loss Function': 'log-likelihood',
-        'Optimizer': 'SGD',
-        'Noise_mode': args.noise_mode,
-        'Dataset': args.dataset,
-        'Batch Size': args.batch_size,
-        'epoch': epoch,
-    }
-    
-    checkpoint_2 = {
-        'net': net2.state_dict(),
-        'Model_number': 3,
-        'Noise_Ratio': args.ratio,
-        'Loss Function': 'CrossEntropyLoss',
-        'Optimizer': 'SGD',
-        'Noise_mode': args.noise_mode,
-        'Accuracy': acc,
-        'Pytorch version': '1.4.0',
-        'Dataset': args.dataset,
-        'Batch Size': args.batch_size,
-        'epoch': epoch,
-    }
-
-    checkpoint_flow_2 = {
-        'net': flowNet2.state_dict(),
-        'Model_number': 4,
-        'Noise_Ratio': args.ratio,
-        'Loss Function': 'log-likelihood',
-        'Optimizer': 'SGD',
-        'Noise_mode': args.noise_mode,
-        'Dataset': args.dataset,
-        'Batch Size': args.batch_size,
-        'epoch': epoch,
-    }
-
-    torch.save(checkpoint_1, os.path.join(model_save_loc, model_name_1))
-    torch.save(checkpoint_flow_1, os.path.join(model_save_loc, model_name_flow_1))
-    
-    torch.save(checkpoint_2, os.path.join(model_save_loc, model_name_2))
-    torch.save(checkpoint_flow_2, os.path.join(model_save_loc, model_name_flow_2))
+    torch.save(checkpoint, path)
+    return 
 
 def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow):
     ## Calculate JSD values and Filter Rate
@@ -428,17 +368,6 @@ if __name__ == '__main__':
     flowNet1 = flowTrainer.create_model()
     flowNet2 = flowTrainer.create_model()
 
-    # gpus
-    if len(args.gpuid) > 1:
-        net1 = nn.DataParallel(net1)
-        flowNet1 = nn.DataParallel(flowNet1)
-        net2 = nn.DataParallel(net2)
-        flowNet2 = nn.DataParallel(flowNet2)
-        # net1 = convert_model(net1)
-        # net2 = convert_model(net2)
-        # flowNet1 = convert_model(flowNet1)
-        # flowNet2 = convert_model(flowNet2)
-
     cudnn.benchmark = True
 
     ## Optimizer and Scheduler
@@ -461,18 +390,19 @@ if __name__ == '__main__':
         schedulerFlow1 = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow1, args.num_epochs, args.lr_f / 1e2)
         scheduler2 = optim.lr_scheduler.CosineAnnealingLR(optimizer2, args.num_epochs, args.lr / 1e2)
         schedulerFlow2 = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow2, args.num_epochs, args.lr_f / 1e2)
-        # schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, 20, args.lr_f / 1e2, verbose=True)
-        # schedulerFlow = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizerFlow, 20, 2,  args.lr_f / 1e2)
-    # else:
-    #     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, 280, args.lr / 1e2)
-    #     schedulerFlow = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow, 280, args.lr_f / 1e2)
-
-    # flowTrainer.setEma(net, flowNet)
 
     ## Resume from the warmup checkpoint 
     if args.resume:
-        start_epoch = args.warm_up
-        load_model(model_save_loc, net1, flowNet1, net2, flowNet2)
+        _ = load_model(os.path.join(model_save_loc, "Net_warmup_1.pth"), net1, optimizer1, scheduler1)
+        _ = load_model(os.path.join(model_save_loc, "Net_warmup_2.pth"), net2, optimizer2, scheduler2)
+        _ = load_model(os.path.join(model_save_loc, "FlowNet_warmup_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1)
+        start_epoch = load_model(os.path.join(model_save_loc, "FlowNet_warmup_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2)
+
+    elif args.resume_best:
+        _ = load_model(os.path.join(model_save_loc, "Net_1.pth"), net1, optimizer1, scheduler1)
+        _ = load_model(os.path.join(model_save_loc, "Net_2.pth"), net2, optimizer2, scheduler2)
+        _ = load_model(os.path.join(model_save_loc, "FlowNet_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1)
+        start_epoch = load_model(os.path.join(model_save_loc, "FlowNet_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2)
         
     elif args.pretrain != '':
         start_epoch = 0
@@ -480,6 +410,13 @@ if __name__ == '__main__':
         net.load_state_dict(torch.load(args.pretrain)['net'])
     else:
         start_epoch = 0
+
+    # gpus
+    if len(args.gpuid) > 1:
+        net1 = nn.DataParallel(net1)
+        flowNet1 = nn.DataParallel(flowNet1)
+        net2 = nn.DataParallel(net2)
+        flowNet2 = nn.DataParallel(flowNet2)
 
     best_acc = 0
 
@@ -547,8 +484,14 @@ if __name__ == '__main__':
             wandb.log(logMsg)
         
         if acc > best_acc:
-            save_model(net1, flowNet1, net2, flowNet2, epoch, acc)
+            if epoch <args.warm_up:
+                save_model(os.path.join(model_save_loc, "Net_warmup_1.pth"), net1, optimizer1, scheduler1, acc)
+                save_model(os.path.join(model_save_loc, "Net_warmup_2.pth"), net2, optimizer2, scheduler2, acc)
+                save_model(os.path.join(model_save_loc, "FlowNet_warmup_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1, acc)
+                save_model(os.path.join(model_save_loc, "FlowNet_warmup_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2, acc)
+            else:
+                save_model(os.path.join(model_save_loc, "Net_1.pth"), net1, optimizer1, scheduler1, acc)
+                save_model(os.path.join(model_save_loc, "Net_2.pth"), net2, optimizer2, scheduler2, acc)
+                save_model(os.path.join(model_save_loc, "FlowNet_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1, acc)
+                save_model(os.path.join(model_save_loc, "FlowNet_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2, acc)
             best_acc = acc
-        # if acc < best_acc - 10.:
-        #     print("early stop")
-        #     exit()

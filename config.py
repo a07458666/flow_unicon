@@ -43,6 +43,7 @@ def argumentParse(input_args = None):
     parser.add_argument('--seed', default=123)
     parser.add_argument('--gpuid', default="0", help='comma separated list of GPU(s) to use.')
     parser.add_argument('--resume', action='store_true', help = 'Resume from the warmup checkpoint')
+    parser.add_argument('--resume_best', action='store_true', help = 'Resume from the best checkpoint')
     parser.add_argument('--num_class', default=10, type=int)
     parser.add_argument('--num_workers', default=4, type=int)
     parser.add_argument('--data_path', default='./data/cifar10', type=str, help='path to dataset')
