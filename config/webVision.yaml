@@ -13,7 +13,7 @@ cond_size: 384  #384 = 1536 / 4
 isRealTask: True
 num_samples: 65944
 weight_decay: 1e-4
-clip_grad: True
+clip_grad: False
 
 centering: True
 center_momentum: 0.8

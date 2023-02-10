@@ -55,7 +55,7 @@ def argumentParse(input_args = None):
     parser.add_argument('--decay', default=0.9, type=float, help='Exponential Moving Average decay')
     parser.add_argument('--warm_up', default=10, type=int)
     parser.add_argument('--num_samples', default=50000, type=int)
-    parser.add_argument('--clip_grad', default=True, help = 'cliping grad')
+    parser.add_argument('--clip_grad', default=False, help = 'cliping grad')
     parser.add_argument('--split', action='store_true', help = 'split flow loss to x, u')
     parser.add_argument('--cond_size', default=128, type=int)
     parser.add_argument('--isRealTask', default=False, type=bool, help='')

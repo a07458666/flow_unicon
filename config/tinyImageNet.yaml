@@ -27,6 +27,4 @@ sharpening: 'UNICON'
 Tf_warmup: 1.0
 Tf: 0.7
 flow_sp: False
-
-## 
-lambda_u: 50
+clip_grad: False

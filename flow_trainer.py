@@ -182,7 +182,7 @@ class FlowTrainer:
                 targets_u = targets_u.detach()        
 
                 ## Label refinement
-                px_net_1, px_flow_1 = self.get_pseudo_label(net1, flowNet1, inputs_x, inputs_x, std = self.args.pseudo_std)
+                px_net_1, px_flow_1 = self.get_pseudo_label(net1, flowNet1, inputs_x, inputs_x2, std = self.args.pseudo_std)
                 # px_net_2, px_flow_2 = self.get_pseudo_label(net2, flowNet2, inputs_x2, inputs_x2, std = self.args.pseudo_std)
 
                 if self.args.lossType == "ce":
@@ -241,6 +241,7 @@ class FlowTrainer:
                 prior = prior.cuda()        
                 pred_mean = torch.softmax(logits, dim=1).mean(0)
                 penalty = torch.sum(prior*torch.log(prior/pred_mean))
+                
                 loss_ce = Lx + lamb * Lu + penalty
 
             ## Flow loss
@@ -272,6 +273,9 @@ class FlowTrainer:
             optimizerFlow.zero_grad()
             flow_feature.retain_grad() # show grad
             loss.backward()
+            if args.clip_grad:
+                # torch.nn.utils.clip_grad_norm_(net.parameters(), 1e-10)
+                torch.nn.utils.clip_grad_norm_(flownet.parameters(), 1e-10)
             if self.args.fix == 'flow':
                 optimizer.step()
             elif self.args.fix == 'net':
