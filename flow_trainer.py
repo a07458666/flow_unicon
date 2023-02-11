@@ -274,7 +274,7 @@ class FlowTrainer:
             flow_feature.retain_grad() # show grad
             loss.backward()
             if self.args.clip_grad:
-                torch.nn.utils.clip_grad_norm_(flownet.parameters(), 1e-10)
+                torch.nn.utils.clip_grad_norm_(flowNet1.parameters(), 1e-10)
             if self.args.fix == 'flow':
                 optimizer.step()
             elif self.args.fix == 'net':
