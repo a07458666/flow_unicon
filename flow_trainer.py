@@ -3,7 +3,7 @@ import torch
 import torch.nn.functional as F
 
 from flowModule.flow import cnf
-from flowModule.utils import standard_normal_logprob, linear_rampup, mix_match
+from flowModule.utils import standard_normal_logprob, linear_rampup, mix_match, normal_logprob
 from flowModule.logger import logFeature
 from flowModule.jensen_shannon import js_distance
 
@@ -669,6 +669,8 @@ class FlowTrainer:
         approx21, delta_log_p2 = flowNet(target, feature, delta_p)
         
         approx2 = standard_normal_logprob(approx21).view(target.size()[0], -1).sum(1, keepdim=True)
+        # approx2 = normal_logprob(approx21, std = 2).view(target.size()[0], -1).sum(1, keepdim=True)
+        
         delta_log_p2 = delta_log_p2.view(target.size()[0], target.shape[1], 1).sum(1)
         log_p2 = (approx2 - delta_log_p2)
         nll = -log_p2.mean()
