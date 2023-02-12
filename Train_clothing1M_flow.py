@@ -51,7 +51,7 @@ parser.add_argument('--dataset', default="Clothing1M", type=str)
 parser.add_argument('--resume', default=False, type=bool, help = 'Resume from the warmup checkpoint')
 parser.add_argument('--warm_up', default=0, type=int)
 parser.add_argument('--name', default="", type=str)
-parser.add_argument('--flow_modules', default="128-128-128-128", type=str)
+parser.add_argument('--flow_modules', default="160-160-160-160", type=str)
 parser.add_argument('--ema_decay', default=0.99, type=float, help='ema decay')
 parser.add_argument('--cond_size', default=512, type=int)
 parser.add_argument('--lambda_f', default=1., type=float, help='flow nll loss weight')
@@ -82,10 +82,10 @@ def train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, u
     
     for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x) in enumerate(labeled_trainloader):      
         try:
-            inputs_u, inputs_u2, inputs_u3, inputs_u4 = unlabeled_train_iter.next()
+            inputs_u, inputs_u2, inputs_u3, inputs_u4 = next(unlabeled_train_iter)
         except:
             unlabeled_train_iter = iter(unlabeled_trainloader)
-            inputs_u, inputs_u2, inputs_u3, inputs_u4 = unlabeled_train_iter.next()
+            inputs_u, inputs_u2, inputs_u3, inputs_u4 = next(unlabeled_train_iter)
         
         batch_size = inputs_x.size(0)
 
@@ -567,8 +567,7 @@ for epoch in range(0, args.num_epochs+1):
         threshold   = torch.mean(prob)                                           ## Simply Take the average as the threshold
         
         SR = torch.sum(prob<threshold).item()/prob.size()[0]                    ## Calculate the Ratio of clean samples   
-        # if threshold.item() < 0.4:
-        #     threshold = threshold + (torch.max(prob) - threshold)/5
+
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob=prob,  paths=paths)         ## Uniform Selection
         logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
         

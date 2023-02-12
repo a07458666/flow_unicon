@@ -213,16 +213,16 @@ class clothing_dataloader:
         self.transforms = {
             "warmup": clothing1m_weak_transform,
             "unlabeled": [
-                        clothing1m_strong_transform,
-                        clothing1m_strong_transform,
                         clothing1m_weak_transform,
-                        clothing1m_weak_transform
+                        clothing1m_weak_transform,
+                        clothing1m_strong_transform,
+                        clothing1m_strong_transform
                     ],
             "labeled": [
-                        clothing1m_strong_transform,
-                        clothing1m_strong_transform,
                         clothing1m_weak_transform,
-                        clothing1m_weak_transform
+                        clothing1m_weak_transform,
+                        clothing1m_strong_transform,
+                        clothing1m_strong_transform
                     ]
         }
         self.transforms_test = transforms.Compose(
