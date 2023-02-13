@@ -572,8 +572,8 @@ class FlowTrainer:
         _, outputs_u11, features_u11 = net(inputs_u, get_feature = True)
         _, outputs_u12, features_u12 = net(inputs_u2, get_feature = True)
         
-        flow_outputs_u11 = self.predict(flowNet, features_u11, std, centering = (self.args.centering and updateCnetering))
-        flow_outputs_u12 = self.predict(flowNet, features_u12, std, centering = False)
+        flow_outputs_u11 = self.predict(flowNet, features_u11, std = std, centering = (self.args.centering and updateCnetering))
+        flow_outputs_u12 = self.predict(flowNet, features_u12, std = std, centering = False)
         
         pu_net = (torch.softmax(outputs_u11, dim=1) + torch.softmax(outputs_u12, dim=1)) / 2
         pu_flow = (flow_outputs_u11 + flow_outputs_u12) / 2
