@@ -296,36 +296,23 @@ class InceptionResNetV2(nn.Module):
         x = self.repeat_2(x)
         x = self.block8(x)
         x = self.conv2d_7b(x)
+        
+        x = self.avgpool_1a(x)
+        x = x.view(x.size(0), -1)
         return x
-
+    
     def logits(self, features):
-        x = self.avgpool_1a(features)
-        x = x.view(x.size(0), -1)
-        x = self.last_linear(x)
+        x = self.last_linear(features)
         return x
     
-    def projection(self, features):
-        x = self.avgpool_1a(features)
-        x = x.view(x.size(0), -1)
-        x = self.bnl(self.projection_head(x))
-        return x
-    
-    def flowFeature(self, features):
-        x = self.avgpool_1a(features)
-        x = x.view(x.size(0), -1)
-        # x = self.feature_head(x)
-        x = F.avg_pool1d(x, 4)
-        return x
-
     def forward(self, input, get_feature = False):
         x = self.features(input)
+        
         logits_out = self.logits(x)
-        ssl_out = self.projection(x)
-        feature_out = self.flowFeature(x)
-
+        ssl_out = self.bnl(self.projection_head(x))
+        feature_out = F.avg_pool1d(x, 4)
+        
         if get_feature:
             return F.normalize(ssl_out, dim=1), logits_out, F.normalize(feature_out, dim=1)
         else:
             return F.normalize(ssl_out, dim=1), logits_out
-
-

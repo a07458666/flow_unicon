@@ -16,7 +16,6 @@ decay: 0.99
 lambda_u: 50
 linear_u: 16
 cond_size: 512 # 2048/ 4
-
 centering: True
 center_momentum: 0.8
 decay: 0.99

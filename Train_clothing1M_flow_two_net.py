@@ -53,9 +53,8 @@ parser.add_argument('--dataset', default="Clothing1M", type=str)
 parser.add_argument('--resume', default=False, type=bool, help = 'Resume from the warmup checkpoint')
 parser.add_argument('--warm_up', default=0, type=int)
 parser.add_argument('--name', default="", type=str)
-parser.add_argument('--flow_modules', default="160-160-160-160", type=str)
+parser.add_argument('--flow_modules', default="128-128-128-128", type=str)
 parser.add_argument('--tol', default=1e-5, type=float, help='flow atol, rtol')
-parser.add_argument('--ema_decay', default=0.99, type=float, help='ema decay')
 parser.add_argument('--cond_size', default=512, type=int)
 parser.add_argument('--lambda_f', default=1., type=float, help='flow nll loss weight')
 parser.add_argument('--pseudo_std', default=0.2, type=float)
@@ -156,8 +155,10 @@ def train(epoch, net1, flowNet1, net2, flowNet2, optimizer, optimizer_flow, labe
             targets_x = flowTrainer.sharpening(px_mix, args.T)        
             targets_x = targets_x.detach()
 
+            print_label_status(targets_x, targets_u)
+            
             ## updateCnetering
-            if args.centering:
+            if args.centering and epoch > 10:
                 _, _ = flowTrainer.get_pseudo_label(net1, flowNet1, inputs_u, inputs_u2, std = args.pseudo_std, updateCnetering = True)   
 
         ## Unsupervised Contrastive Loss
@@ -197,7 +198,7 @@ def train(epoch, net1, flowNet1, net2, flowNet2, optimizer, optimizer_flow, labe
         ## Flow
         _, log_p2 = flowTrainer.log_prob(mixed_target.unsqueeze(1).cuda(), flow_feature, flowNet1)
 
-        lamb_u = linear_rampup(epoch+batch_idx/num_iter, args.warm_up, args.linear_u, args.lambda_flow_u_warmup, args.lambda_flow_u)   
+        lamb_u = linear_rampup(epoch+batch_idx/num_iter, args.warm_up, args.linear_u, args.lambda_flow_u_warmup, args.lambda_flow_u)
 
         loss_nll_x = -log_p2[:batch_size*2]
         loss_nll_u = -log_p2[batch_size*2:]
@@ -221,7 +222,7 @@ def train(epoch, net1, flowNet1, net2, flowNet2, optimizer, optimizer_flow, labe
         loss.backward()
         if args.clip_grad:
                 # torch.nn.utils.clip_grad_norm_(net.parameters(), 1e-10)
-                torch.nn.utils.clip_grad_norm_(flownet.parameters(), 1e-10)
+                torch.nn.utils.clip_grad_norm_(flowNet1.parameters(), 1e-10)
         optimizer.step()
         optimizer_flow.step()
 
@@ -238,40 +239,31 @@ def train(epoch, net1, flowNet1, net2, flowNet2, optimizer, optimizer_flow, labe
             logMsg["loss/loss_simCLR"] = loss_simCLR.item()
             logMsg["loss/penalty"] = penalty.item()
             logMsg["loss/loss_flow"] = loss_flow.item()
+            wandb.log(logMsg)
 
 def warmup(net, flowNet, optimizer, optimizer_flow, dataloader):
     net.train()
     flowNet.train()
-    for batch_idx, (inputs, labels, path) in enumerate(dataloader):      
+    for batch_idx, (inputs, labels, path) in enumerate(dataloader):
         inputs, labels = inputs.cuda(), labels.cuda() 
         optimizer.zero_grad()
         optimizer_flow.zero_grad()
         _ , outputs, feature_flow = net(inputs, get_feature = True)              
-        loss = CEloss(outputs, labels)  
+        loss_ce = CEloss(outputs, labels)  
         
         penalty = conf_penalty(outputs)
 
         # == flow ==
         labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
         flow_labels = labels_one_hot.unsqueeze(1).cuda()
-                    
-                    
+                           
         loss_nll, log_p2 = flowTrainer.log_prob(flow_labels, feature_flow, flowNet)
 
         if args.lossType == "mix":
-            if args.noise_mode=='asym': # Penalize confident prediction for asymmetric noise
-                L = loss_ce + penalty + (args.lambda_f * loss_nll)
-            else:
                 L = loss_ce + (args.lambda_f * loss_nll)
         elif args.lossType == "ce":
-            if args.noise_mode=='asym': # Penalize confident prediction for asymmetric noise
-                L = loss_ce + penalty
-            else:
                 L = loss_ce
         elif args.lossType == "nll":
-            if args.noise_mode=='asym':
-                L = penalty + (args.lambda_f * loss_nll)
-            else:
                 L = (args.lambda_f * loss_nll)  
 
         L.backward()  
@@ -279,19 +271,19 @@ def warmup(net, flowNet, optimizer, optimizer_flow, dataloader):
         optimizer_flow.step()
 
         sys.stdout.write('\r')
-        sys.stdout.write('|Warm-up: Iter[%3d/%3d]\t CE-loss: %.4f  Conf-Penalty: %.4f nll loss: %.4f'
-                %(batch_idx+1, args.num_batches, loss.item(), penalty.item(), loss_nll.item()))
+        sys.stdout.write('|Warm-up: Iter[%3d/%3d]\t CE-loss: %.4f nll loss: %.4f'
+                %(batch_idx+1, args.num_batches, loss_ce.item(), loss_nll.item()))
         sys.stdout.flush()
 
         ## wandb
         if (wandb != None):
             logMsg = {}
             logMsg["epoch"] = epoch
-            logMsg["loss/CEloss"] = loss.item()
+            logMsg["loss/CEloss"] = loss_ce.item()
             logMsg["loss/nll"] = loss_nll.item()
-            logMsg["loss/penalty"] = penalty.item()
+            wandb.log(logMsg)
     
-def eval(net, flowNet, loader):
+def eval(evalType, net, flowNet, loader):
     acc_meter.reset()
     net.eval()
     flowNet.eval()
@@ -354,16 +346,16 @@ def eval(net, flowNet, loader):
         acc = acc_mix
         # confidence = confidence_mix
 
-    print("\n| Test Acc: %.2f%%\n" %(acc))  
+    print(f"\n| {evalType} Acc: {acc:.2f}\n")  
     accs = acc_meter.value()
     
     ## wandb
     if (wandb != None):
         logMsg = {}
         logMsg["epoch"] = epoch
-        logMsg["accHead/test_flow"] = acc_flow
-        logMsg["accHead/test_resnet"] = acc_ce
-        logMsg["accHead/test_mix"] = acc_mix
+        logMsg[f"accHead/{evalType}_flow"] = acc_flow
+        logMsg[f"accHead/{evalType}_resnet"] = acc_ce
+        logMsg[f"accHead/{evalType}_mix"] = acc_mix
         wandb.log(logMsg)
 
     return acc , accs
@@ -502,23 +494,39 @@ def logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloa
 
         wandb.log(logMsg)
 
-def load_model():
-    net1.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_1)))
-    flowNet1.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_1)))
-    net2.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_2)))
-    flowNet2.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_2)))
+def print_label_status(targets_x, targets_u):
+    refine_labels_x = [0] * args.num_class
+    pseudo_labels_u = [0] * args.num_class
+    
+    for i in targets_u.max(dim=1).indices:
+        pseudo_labels_u[i.item()] += 1
+
+    for i in targets_x.max(dim=1).indices:
+        refine_labels_x[i.item()] += 1
+
+    if (wandb != None):
+        logMsg = {}
+        logMsg["epoch"] = epoch
+        logMsg["label_count/pseudo_labels_u"] =  max(pseudo_labels_u)
+        logMsg["label_count/refine_labels_x"] =  max(refine_labels_x)
+        wandb.log(logMsg)
+
+def load_model(net1, flowNet1, net2, flowNet2):
+    net1.module.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_1)))
+    flowNet1.module.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_1)))
+    net2.module.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_2)))
+    flowNet2.module.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_2)))
 
 def save_model(idx, net, flowNet):
     if idx == 0:
         save_point = os.path.join(model_save_loc, model_name_1)
         save_point_flow = os.path.join(model_save_loc, model_name_flow_1)
-        torch.save(net.state_dict(), save_point)
-        torch.save(flowNet.state_dict(), save_point_flow)
     else:
         save_point = os.path.join(model_save_loc, model_name_2)
         save_point_flow = os.path.join(model_save_loc, model_name_flow_2)
-        torch.save(net.state_dict(), save_point)
-        torch.save(flowNet.state_dict(), save_point_flow)
+
+    torch.save(net.module.state_dict(), save_point)
+    torch.save(flowNet.module.state_dict(), save_point_flow)
 
 def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, nb_repeat):
     ## Calculate JSD values and Filter Rate
@@ -531,10 +539,10 @@ def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, nb_repeat
         print(f'Train Net {idx} repeat {i}\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob,  paths=paths) # Uniform Selection
         train(epoch, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
-        acc_val, accs_val = eval(net1, flowNet1, val_loader)
-        if acc_val > best_acc[idx-1]:
-            print('| Saving Best Net%d ...'%idx)
-            best_acc[idx-1] = acc_val
+        acc_val, accs_val = eval(f"val {idx + 1}",net1, flowNet1, val_loader)
+        if acc_val > best_acc[idx]:
+            print(f'| Saving Best Net{idx} acc_val{acc_val:.3f}, best_acc {best_acc[idx]:.3f}')
+            best_acc[idx] = acc_val
             save_model(idx, net1, flowNet1)
 
     logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
@@ -626,7 +634,7 @@ model_name_2 = 'clothing1m_net_2.pth.tar'
 model_name_flow_2 = 'clothing1m_flow_2.pth.tar'
 
 if args.resume:
-    load_model()
+    load_model(net1, flowNet1, net2, flowNet2)
 
 best_acc = [0,0]
 SR = 0
@@ -639,16 +647,29 @@ for epoch in range(0, args.num_epochs+1):
     val_loader = loader.run(0, 'val')
     
     if epoch>100:
-        nb_repeat =3  ## Change how many times we want to repeat on the same selection
+        nb_repeat = 3  ## Change how many times we want to repeat on the same selection
 
     if epoch<warm_up:             
-        print('Warmup Net 1')
+        print('\nWarmup Net 1')
         train_loader = loader.run(0,'warmup')
+        val_loader = loader.run(0, 'val')
         warmup(net1, flowNet1, optimizer1, optimizerFlow1,train_loader)
-
-        print('Warmup Net 2')
+        acc_val1, accs_val1 = eval("val_1", net1, flowNet1, val_loader)
+        if acc_val1 > best_acc[0]:
+            print('| Saving Best Net%d ...'%0)
+            best_acc[0] = acc_val1
+            save_model(0, net1, flowNet1)
+        
+        print('\nWarmup Net 2')
         train_loader = loader.run(0,'warmup')
+        val_loader = loader.run(0, 'val')
         warmup(net2, flowNet2, optimizer2, optimizerFlow2,train_loader)
+        acc_val2, accs_val2 = eval("val_2", net2, flowNet2, val_loader)
+
+        if acc_val2 > best_acc[1]:
+            print('| Saving Best Net%d ...'%2)
+            best_acc[1] = acc_val2
+            save_model(1, net2, flowNet2)
 
     else:
         run(0, net1, flowNet1, net2, flowNet2, optimizer1, optimizerFlow1, nb_repeat)
@@ -660,17 +681,20 @@ for epoch in range(0, args.num_epochs+1):
     schedulerFlow2.step()
 
     # Validation
-    acc_val1, accs_val1  = eval(net1, flowNet1, val_loader)
-    acc_val2, accs_val2 = eval(net2, flowNet2, val_loader) 
-    log.write('Validation Epoch:%d  Acc1:%.2f  Acc2:%.2f\n'%(epoch, acc_val1, acc_val2))
+    # acc_val1, accs_val1 = eval("val_1", net1, flowNet1, val_loader)
+    # acc_val2, accs_val2 = eval("val_2", net2, flowNet2, val_loader) 
+    # print('\n|Validation Epoch:%d  Acc1:%.2f  Acc2:%.2f\n'%(epoch, acc_val1, acc_val2))
+    # log.write('Validation Epoch:%d  Acc1:%.2f  Acc2:%.2f\n'%(epoch, acc_val1, acc_val2))
     
-    load_model()
+    acc_val, confidence_val  = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, val_loader)
+    
+    load_model(net1, flowNet1, net2, flowNet2)
+ 
+    test_loader = loader.run(0,'test')
+    acc, confidence  = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, test_loader)
 
-    log.flush() 
-    test_loader = loader.run(0,'test')  
-    acc_test, accs_test = eval(net, flowNet, test_loader)   
-    print('\n| Epoch:%d \t  Acc: %.2f%% (%.2f%%) \n'%(epoch,accs_test[0],accs_test[1]))
-    log.write('Epoch:%d \t  Acc: %.2f%% (%.2f%%) \n'%(epoch,accs_test[0],accs_test[1]))
+    print(f"\n| Epoch:{epoch} \t  Test Acc: {acc:.2f} \n")
+    log.write(f'\n| Epoch:{epoch} \t  Test Acc: {acc:.2f} \n')
     log.flush()  
 
     ## wandb
@@ -678,11 +702,10 @@ for epoch in range(0, args.num_epochs+1):
         logMsg = {}
         logMsg["epoch"] = epoch
         logMsg["runtime"] = time.time() - startTime
-        logMsg["acc/test"] = acc_test
-        logMsg["acc/test_top1"] = accs_test[0]
-        logMsg["acc/test_top5"] = accs_test[1]
+        logMsg["test/acc"] = acc
+        logMsg["test/confidence"] = confidence
+        logMsg["val/acc"] = acc_val
+        logMsg["val/confidence_val"] = confidence_val
+
         
-        logMsg["acc/val"] = acc_val1
-        logMsg["acc/test_top1"] = accs_val1[0]
-        logMsg["acc/test_top5"] = accs_val1[1]
         wandb.log(logMsg)
