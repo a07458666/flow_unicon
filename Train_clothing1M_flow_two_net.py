@@ -433,6 +433,9 @@ if (wandb != None):
     wandb.config.update(args)
     wandb.define_metric("loss", summary="min")
     wandb.define_metric("acc/test", summary="max")
+    wandb.define_metric("test/acc", summary="max")
+    wandb.define_metric("val/acc", summary="max")
+    
 
 net1 = nn.DataParallel(net1)
 net2 = nn.DataParallel(net2)

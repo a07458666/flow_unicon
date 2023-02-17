@@ -60,10 +60,8 @@ class FlowTrainer:
     ## For Standard Training 
     def warmup_standard(self, epoch, net, flowNet, optimizer, optimizerFlow, dataloader):
         flowNet.train()
-        if self.args.fix == 'net':
-            net.eval()
-        else:    
-            net.train()
+        net.train()
+        
         num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
         
         for batch_idx, (inputs, labels) in enumerate(dataloader):
@@ -103,13 +101,8 @@ class FlowTrainer:
             optimizer.zero_grad()
             optimizerFlow.zero_grad()
             L.backward()
-            if self.args.fix == 'flow':
-                optimizer.step()
-            elif self.args.fix == 'net':
-                optimizerFlow.step()   
-            else:
-                optimizer.step()
-                optimizerFlow.step()  
+            optimizer.step()
+            optimizerFlow.step()  
             
             ## wandb
             if (wandb != None):
@@ -252,11 +245,9 @@ class FlowTrainer:
             loss_nll_x = -log_p2[:batch_size*2]
             loss_nll_u = -log_p2[batch_size*2:]
 
-            if self.args.split:
-                loss_nll = loss_nll_x.mean() + (lamb_u * loss_nll_u.mean())
-            else:
-                log_p2[batch_size*2:] *= lamb_u
-                loss_nll = (-log_p2).mean()
+
+            log_p2[batch_size*2:] *= lamb_u
+            loss_nll = (-log_p2).mean()
 
             loss_flow = (self.args.lambda_f * loss_nll)
 
@@ -275,13 +266,8 @@ class FlowTrainer:
             loss.backward()
             if self.args.clip_grad:
                 torch.nn.utils.clip_grad_norm_(flowNet1.parameters(), 1e-10)
-            if self.args.fix == 'flow':
-                optimizer.step()
-            elif self.args.fix == 'net':
-                optimizerFlow.step()  
-            else:
-                optimizer.step()
-                optimizerFlow.step()  
+            optimizer.step()
+            optimizerFlow.step()  
 
             ## wandb
             if (wandb != None):
