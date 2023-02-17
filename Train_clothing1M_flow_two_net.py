@@ -53,7 +53,7 @@ parser.add_argument('--dataset', default="Clothing1M", type=str)
 parser.add_argument('--resume', default=False, type=bool, help = 'Resume from the warmup checkpoint')
 parser.add_argument('--warm_up', default=0, type=int)
 parser.add_argument('--name', default="", type=str)
-parser.add_argument('--flow_modules', default="128-128-128-128", type=str)
+parser.add_argument('--flow_modules', default="8-8-8-8", type=str)
 parser.add_argument('--tol', default=1e-5, type=float, help='flow atol, rtol')
 parser.add_argument('--cond_size', default=512, type=int)
 parser.add_argument('--lambda_f', default=1., type=float, help='flow nll loss weight')
@@ -92,197 +92,6 @@ contrastive_criterion = SupConLoss()
 # import wandb
 # wandb.init(project="noisy-label-project-clothing1M", entity="...")
 
-## Training
-def train(epoch, net1, flowNet1, net2, flowNet2, optimizer, optimizer_flow, labeled_trainloader, unlabeled_trainloader):
-    net1.train()         # Fix one network and train the other    
-    flowNet1.train()
-    net2.eval()
-    flowNet2.eval()
-    
-    unlabeled_train_iter = iter(unlabeled_trainloader)    
-    num_iter = (len(labeled_trainloader.dataset)//args.batch_size)+1
-    
-    for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x) in enumerate(labeled_trainloader):      
-        try:
-            inputs_u, inputs_u2, inputs_u3, inputs_u4 = next(unlabeled_train_iter)
-        except:
-            unlabeled_train_iter = iter(unlabeled_trainloader)
-            inputs_u, inputs_u2, inputs_u3, inputs_u4 = next(unlabeled_train_iter)
-        
-        batch_size = inputs_x.size(0)
-
-        # Transform label to one-hot
-        labels_x = torch.zeros(batch_size, args.num_class).scatter_(1, labels_x.view(-1,1), 1)        
-        w_x = w_x.view(-1,1).type(torch.FloatTensor) 
-
-        inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x = inputs_x.cuda(), inputs_x2.cuda(), inputs_x3.cuda(), inputs_x4.cuda(), labels_x.cuda(), w_x.cuda()
-        inputs_u, inputs_u2, inputs_u3, inputs_u4 = inputs_u.cuda(), inputs_u2.cuda(), inputs_u3.cuda(), inputs_u4.cuda()
-        
-        lamb_Tu = linear_rampup(epoch+batch_idx/num_iter, args.warm_up, args.lambda_p, args.Tf_warmup, args.Tf)
-
-        with torch.no_grad():
-            pu_net_1, pu_flow_1 = flowTrainer.get_pseudo_label(net1, flowNet1, inputs_u, inputs_u2, std = args.pseudo_std)
-            pu_net_2, pu_flow_2 = flowTrainer.get_pseudo_label(net2, flowNet2, inputs_u, inputs_u2, std = args.pseudo_std)
-  
-            pu_net_sp_1 = flowTrainer.sharpening(pu_net_1, args.T)
-            pu_net_sp_2 = flowTrainer.sharpening(pu_net_2, args.T)
-            
-            if args.flow_sp:
-                pu_flow_1 = flowTrainer.sharpening(pu_flow_1, lamb_Tu)
-                pu_flow_2 = flowTrainer.sharpening(pu_flow_2, lamb_Tu)
-
-            ## Pseudo-label
-            if args.lossType == "ce":
-                targets_u = (pu_net_sp_1 + pu_net_sp_2) / 2
-            elif args.lossType == "nll":
-                targets_u = (pu_flow_1 + pu_flow_2) / 2
-            elif args.lossType == "mix":
-                targets_u = (pu_net_sp_1 + pu_net_sp_2 + pu_flow_1 + pu_flow_2) / 4
-
-            targets_u = targets_u.detach()
-
-            px_net_1, px_flow_1 = flowTrainer.get_pseudo_label(net1, flowNet1, inputs_x, inputs_x2, std = args.pseudo_std)
-
-            if args.lossType == "ce":
-                px = px_net_1
-            elif args.lossType == "nll":
-                px = px_flow_1
-            elif args.lossType == "mix":
-                px = (px_net_1 + px_flow_1) / 2
-
-            px_mix = w_x*labels_x + (1-w_x)*px
-
-            targets_x = flowTrainer.sharpening(px_mix, args.T)        
-            targets_x = targets_x.detach()
-
-            print_label_status(targets_x, targets_u)
-            
-            ## updateCnetering
-            if args.centering and epoch > 10:
-                _, _ = flowTrainer.get_pseudo_label(net1, flowNet1, inputs_u, inputs_u2, std = args.pseudo_std, updateCnetering = True)   
-
-        ## Unsupervised Contrastive Loss
-        f1, _ = net1(inputs_u3)
-        f2, _ = net1(inputs_u4)
-
-        features    = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
-        loss_simCLR = contrastive_criterion(features)
-
-        all_inputs  = torch.cat([inputs_x3, inputs_x4, inputs_u3, inputs_u4], dim=0)
-        all_targets = torch.cat([targets_x, targets_x, targets_u, targets_u], dim=0)
-
-        mixed_input, mixed_target = mix_match(all_inputs, all_targets, args.alpha) 
-
-        _, logits, flow_feature = net1(mixed_input, get_feature = True)
-
-        # ## Test Lu loss
-        logits_x = logits[:batch_size*2]
-        logits_u = logits[batch_size*2:]        
-        
-        # ## Semi-supervised Loss
-        Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2],
-                                logits_u, mixed_target[batch_size*2:],
-                                epoch+batch_idx/num_iter, warm_up,
-                                args.lambda_u, args.linear_u)
-        # Lx = -torch.mean(
-        #     torch.sum(F.log_softmax(logits, dim=1) * mixed_target, dim=1)
-        # )
-        ## Regularization
-        prior = torch.ones(args.num_class) / args.num_class
-        prior = prior.cuda()
-        pred_mean = torch.softmax(logits, dim=1).mean(0)
-        penalty = torch.sum(prior * torch.log(prior / pred_mean))
-
-        loss_ce = Lx + lamb * Lu + penalty
-
-        ## Flow
-        _, log_p2 = flowTrainer.log_prob(mixed_target.unsqueeze(1).cuda(), flow_feature, flowNet1)
-
-        lamb_u = linear_rampup(epoch+batch_idx/num_iter, args.warm_up, args.linear_u, args.lambda_flow_u_warmup, args.lambda_flow_u)
-
-        loss_nll_x = -log_p2[:batch_size*2]
-        loss_nll_u = -log_p2[batch_size*2:]
-        
-        log_p2[batch_size*2:] *= lamb_u
-        loss_nll = (-log_p2).mean()
-        
-        loss_flow = (args.lambda_f * loss_nll)
-        
-        ## Total Loss
-        if args.lossType == "mix":
-            loss = loss_flow + loss_ce + (args.lambda_c * loss_simCLR)
-        elif args.lossType == "ce":
-            loss = loss_ce + (args.lambda_c * loss_simCLR)
-        elif args.lossType == "nll":
-            loss = loss_flow + (args.lambda_c * loss_simCLR)
-
-        ## Compute gradient and do SGD step
-        optimizer.zero_grad()
-        optimizer_flow.zero_grad()
-        loss.backward()
-        if args.clip_grad:
-                # torch.nn.utils.clip_grad_norm_(net.parameters(), 1e-10)
-                torch.nn.utils.clip_grad_norm_(flowNet1.parameters(), 1e-10)
-        optimizer.step()
-        optimizer_flow.step()
-
-        sys.stdout.write('\r')
-        sys.stdout.write('%s: | Epoch [%3d/%3d] Iter[%3d/%3d]\t CE loss: %.2f  Contrative Loss:%.4f nll Loss:%.4f'
-                %(args.dataset,  epoch, args.num_epochs, batch_idx+1, num_iter, loss_ce, loss_simCLR, loss_flow))
-        sys.stdout.flush()
-
-        ## wandb
-        if (wandb != None):
-            logMsg = {}
-            logMsg["epoch"] = epoch
-            logMsg["loss/loss_ce"] = loss_ce.item()
-            logMsg["loss/loss_simCLR"] = loss_simCLR.item()
-            logMsg["loss/penalty"] = penalty.item()
-            logMsg["loss/loss_flow"] = loss_flow.item()
-            wandb.log(logMsg)
-
-def warmup(net, flowNet, optimizer, optimizer_flow, dataloader):
-    net.train()
-    flowNet.train()
-    for batch_idx, (inputs, labels, path) in enumerate(dataloader):
-        inputs, labels = inputs.cuda(), labels.cuda() 
-        optimizer.zero_grad()
-        optimizer_flow.zero_grad()
-        _ , outputs, feature_flow = net(inputs, get_feature = True)              
-        loss_ce = CEloss(outputs, labels)  
-        
-        penalty = conf_penalty(outputs)
-
-        # == flow ==
-        labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
-        flow_labels = labels_one_hot.unsqueeze(1).cuda()
-                           
-        loss_nll, log_p2 = flowTrainer.log_prob(flow_labels, feature_flow, flowNet)
-
-        if args.lossType == "mix":
-                L = loss_ce + (args.lambda_f * loss_nll)
-        elif args.lossType == "ce":
-                L = loss_ce
-        elif args.lossType == "nll":
-                L = (args.lambda_f * loss_nll)  
-
-        L.backward()  
-        optimizer.step()
-        optimizer_flow.step()
-
-        sys.stdout.write('\r')
-        sys.stdout.write('|Warm-up: Iter[%3d/%3d]\t CE-loss: %.4f nll loss: %.4f'
-                %(batch_idx+1, args.num_batches, loss_ce.item(), loss_nll.item()))
-        sys.stdout.flush()
-
-        ## wandb
-        if (wandb != None):
-            logMsg = {}
-            logMsg["epoch"] = epoch
-            logMsg["loss/CEloss"] = loss_ce.item()
-            logMsg["loss/nll"] = loss_nll.item()
-            wandb.log(logMsg)
-    
 def eval(evalType, net, flowNet, loader):
     acc_meter.reset()
     net.eval()
@@ -390,7 +199,7 @@ def Selection_Rate(args, prob):
     return SR, threshold
 
 ## Calculate JSD
-def Calculate_JSD(epoch, net1, flowNet1, ne2, flowNet2):
+def Calculate_JSD(epoch, net1, flowNet1, net2, flowNet2):
     net1.eval()
     net2.eval()
     flowNet1.eval()
@@ -398,7 +207,6 @@ def Calculate_JSD(epoch, net1, flowNet1, ne2, flowNet2):
 
     num_samples = args.num_batches*args.batch_size
     prob = torch.zeros(num_samples)
-    JS_dist = Jensen_Shannon()
     paths = []
     n=0
     eval_loader = loader.run(0, 'eval_train')
@@ -512,6 +320,7 @@ def print_label_status(targets_x, targets_u):
         wandb.log(logMsg)
 
 def load_model(net1, flowNet1, net2, flowNet2):
+    print("load_model")
     net1.module.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_1)))
     flowNet1.module.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_1)))
     net2.module.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_2)))
@@ -532,14 +341,15 @@ def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, nb_repeat
     ## Calculate JSD values and Filter Rate
     print(f"Calculate JSD Net {idx}\n")
     prob, paths = Calculate_JSD(epoch, net1, flowNet1, net2, flowNet2)
+
     threshold   = torch.mean(prob)                                           ## Simply Take the average as the threshold
     SR = torch.sum(prob<threshold).item()/prob.size()[0]                    ## Calculate the Ratio of clean samples      
 
     for i in range(nb_repeat):
         print(f'Train Net {idx} repeat {i}\n')
         labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob,  paths=paths) # Uniform Selection
-        train(epoch, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
-        acc_val, accs_val = eval(f"val {idx + 1}",net1, flowNet1, val_loader)
+        flowTrainer.train(epoch, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
+        acc_val, accs_val = eval(f"val_{idx + 1}",net1, flowNet1, val_loader)
         if acc_val > best_acc[idx]:
             print(f'| Saving Best Net{idx} acc_val{acc_val:.3f}, best_acc {best_acc[idx]:.3f}')
             best_acc[idx] = acc_val
@@ -651,9 +461,9 @@ for epoch in range(0, args.num_epochs+1):
 
     if epoch<warm_up:             
         print('\nWarmup Net 1')
-        train_loader = loader.run(0,'warmup')
+        warmup_trainloader = loader.run(0,'warmup')
         val_loader = loader.run(0, 'val')
-        warmup(net1, flowNet1, optimizer1, optimizerFlow1,train_loader)
+        flowTrainer.warmup_standard(epoch, net1, flowNet1, optimizer1, optimizerFlow1,warmup_trainloader)
         acc_val1, accs_val1 = eval("val_1", net1, flowNet1, val_loader)
         if acc_val1 > best_acc[0]:
             print('| Saving Best Net%d ...'%0)
@@ -661,9 +471,9 @@ for epoch in range(0, args.num_epochs+1):
             save_model(0, net1, flowNet1)
         
         print('\nWarmup Net 2')
-        train_loader = loader.run(0,'warmup')
+        warmup_trainloader = loader.run(0,'warmup')
         val_loader = loader.run(0, 'val')
-        warmup(net2, flowNet2, optimizer2, optimizerFlow2,train_loader)
+        flowTrainer.warmup_standard(epoch, net2, flowNet2, optimizer2, optimizerFlow2,warmup_trainloader)
         acc_val2, accs_val2 = eval("val_2", net2, flowNet2, val_loader)
 
         if acc_val2 > best_acc[1]:

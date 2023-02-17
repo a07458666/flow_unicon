@@ -132,7 +132,7 @@ class clothing_dataset(Dataset):
             img3 = self.transform[2](image)
             img4 = self.transform[3](image)
             
-            return img1, img2, img3, img4, target, prob
+            return img1, img2, img3, img4, target, prob, -1
 
         elif self.mode == "unlabeled":
             img_path = self.train_imgs[index]
@@ -142,7 +142,7 @@ class clothing_dataset(Dataset):
             img3 = self.transform[2](image)
             img4 = self.transform[3](image)
 
-            return img1, img2, img3, img4
+            return img1, img2, img3, img4, -1
             
         elif self.mode == "all":
             img_path = self.train_imgs[index]
