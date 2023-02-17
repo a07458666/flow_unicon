@@ -7,8 +7,8 @@ import torch
 import os
 from autoaugment import CIFAR10Policy, ImageNetPolicy
 
-resize_size = 160
-crop_size = 64
+resize_size = 320
+crop_size = 299
 
 transform_weak_c1m_c10_compose = transforms.Compose(
     [
