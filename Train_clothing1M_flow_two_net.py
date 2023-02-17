@@ -79,6 +79,8 @@ parser.add_argument('--lambda_flow_u', default=1, type=float, help='weight for u
 parser.add_argument('--lambda_flow_u_warmup', default=0.1, type=float, help='weight for unsupervised loss start value')
 
 parser.add_argument('--lambda_u', default=30, type=float, help='weight for unsupervised loss')
+parser.add_argument('--isRealTask', default=True, type=bool, help='')
+
 args = parser.parse_args()
 
 # torch.cuda.set_device(args.gpuid)
