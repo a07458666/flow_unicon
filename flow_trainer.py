@@ -312,10 +312,12 @@ class FlowTrainer:
                         logMsg["centering(min)"] = flowNet1.center.min().item()
 
                 wandb.log(logMsg)
-
+            
             sys.stdout.write('\r')
-            sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t Contrastive Loss:%.4f NLL(x) loss: %.2f NLL(u) loss: %.2f'
-                    %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_simCLR.item(),  loss_nll_x.mean().item(), loss_nll_u.mean().item()))
+            if self.args.isRealTask:
+                sys.stdout.write(f"{self.args.dataset} | Epoch [{epoch:3d}/{self.args.num_epochs:3d}] Iter[{batch_idx+1:3d}/{num_iter}]\t Contrastive Loss:{loss_simCLR.item():.4f} NLL(x) loss: {loss_nll_x.mean():.2f} NLL(u) loss: {loss_nll_u.mean().item():.2f}")
+            else:
+                sys.stdout.write(f"{self.args.dataset}: {self.args.ratio:.2f}-{self.args.noise_mode} | Epoch [{epoch:3d}/{self.args.num_epochs:3d}] Iter[{batch_idx+1:3d}/{num_iter}]\t Contrastive Loss:{loss_simCLR.item():.4f} NLL(x) loss: {loss_nll_x.mean():.2f} NLL(u) loss: {loss_nll_u.mean().item():.2f}")
             sys.stdout.flush()
         
 
