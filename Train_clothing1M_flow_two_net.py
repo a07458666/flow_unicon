@@ -53,7 +53,7 @@ parser.add_argument('--dataset', default="Clothing1M", type=str)
 parser.add_argument('--resume', default=False, type=bool, help = 'Resume from the warmup checkpoint')
 parser.add_argument('--warm_up', default=0, type=int)
 parser.add_argument('--name', default="", type=str)
-parser.add_argument('--flow_modules', default="8-8-8-8", type=str)
+parser.add_argument('--flow_modules', default="64-64-64-64", type=str)
 parser.add_argument('--tol', default=1e-5, type=float, help='flow atol, rtol')
 parser.add_argument('--cond_size', default=512, type=int)
 parser.add_argument('--lambda_f', default=1., type=float, help='flow nll loss weight')
@@ -115,14 +115,12 @@ def eval(evalType, net, flowNet, loader):
         for batch_idx, (inputs, targets) in enumerate(loader):
             inputs, targets = inputs.cuda(), targets.cuda()
             
-            _, logits1, feature1 = net1(inputs, get_feature = True)
-            outputs1 = flowTrainer.predict(flowNet1, feature1)
+            _, logits, feature = net(inputs, get_feature = True)
+            outputs = flowTrainer.predict(flowNet, feature)
 
-            _, logits2, feature2 = net2(inputs, get_feature = True)
-            outputs2 = flowTrainer.predict(flowNet2, feature2)
 
-            logits  = (torch.softmax(logits1, dim=1) + torch.softmax(logits2, dim=1)) / 2
-            outputs = (outputs1 + outputs2) / 2
+            logits  = torch.softmax(logits, dim=1)
+            outputs = outputs
             mix_outs = (logits + outputs) / 2
 
             total   += targets.size(0)
