@@ -53,13 +53,12 @@ parser.add_argument('--dataset', default="Clothing1M", type=str)
 parser.add_argument('--resume', default=False, type=bool, help = 'Resume from the warmup checkpoint')
 parser.add_argument('--warm_up', default=0, type=int)
 parser.add_argument('--name', default="", type=str)
-parser.add_argument('--flow_modules', default="64-64-64-64", type=str)
+parser.add_argument('--flow_modules', default="128-128-128-128", type=str)
 parser.add_argument('--tol', default=1e-5, type=float, help='flow atol, rtol')
 parser.add_argument('--cond_size', default=512, type=int)
 parser.add_argument('--lambda_f', default=1., type=float, help='flow nll loss weight')
 parser.add_argument('--pseudo_std', default=0.2, type=float)
 
-parser.add_argument('--centering', default=True, type=bool, help='use centering')
 parser.add_argument('--lossType', default='nll', type=str, choices=['nll', 'ce', 'mix'], help = 'useing nll, ce or nll + ce loss')
 parser.add_argument('--clip_grad', default=False, help = 'cliping grad')
 parser.add_argument('--d_u',  default=0.7, type=float)
@@ -70,8 +69,10 @@ parser.add_argument('--lambda_p', default=50, type=float, help='sharpening lamb'
 parser.add_argument('--Tf_warmup', default=1.0, type=float, help='warm-up flow sharpening temperature')
 parser.add_argument('--Tf', default=0.7, type=float, help='flow sharpening temperature')
 parser.add_argument('--sharpening', default="UNICON", type=str, choices=['DINO', 'UNICON'], help = 'sharpening method')
+
 # Flow Centering
-parser.add_argument('--center_momentum', default=0.8, type=float, help='use centering')
+parser.add_argument('--centering', default=False, type=bool, help='use centering')
+parser.add_argument('--center_momentum', default=0.95, type=float, help='use centering')
 
 # Flow w_u
 parser.add_argument('--linear_u', default=16, type=float, help='weight for unsupervised loss')
@@ -169,34 +170,59 @@ def eval(evalType, net, flowNet, loader):
 
     return acc , accs
 
-## Calculate the KL Divergence
-def kl_divergence(p, q):
-    return (p * ((p+1e-10) / (q+1e-10)).log()).sum(dim=1)
+## For Standard Training 
+    def warmup_standard(epoch, net, flowNet, optimizer, optimizerFlow, dataloader, updateCenter = False):
+        flowNet.train()
+        net.train()
+        
+        num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
+        
+        for batch_idx, (inputs, labels, path) in enumerate(dataloader):
+            inputs, labels = inputs.cuda(), labels.cuda() 
+            labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
 
-## Jensen_Shannon divergence (Symmetric and Smoother than the KL divergence) 
-class Jensen_Shannon(nn.Module):
-    def __init__(self):
-        super(Jensen_Shannon,self).__init__()
-        pass
-    def forward(self, p,q):
-        m = (p+q)/2
-        return 0.5*kl_divergence(p, m) + 0.5*kl_divergence(q, m)
+            _, outputs, feature_flow = net(inputs, get_feature = True)
+            flow_labels = labels_one_hot.unsqueeze(1).cuda()
+            logFeature(feature_flow)      
+  
+            # == flow ==
+            loss_nll, log_p2 = flowTrainer.log_prob(flow_labels, feature_flow, flowNet)
+            # == flow end ===
 
-def Selection_Rate(args, prob):
-    threshold = torch.mean(prob)
-    if threshold.item() > args.d_u:
-            threshold = threshold - (threshold-torch.min(prob))/args.tau
-    if threshold.item() < args.d_up:
-            threshold = threshold + (torch.max(prob) - threshold)/args.tau
-    SR = torch.sum(prob<threshold).item()/args.num_samples
-    print("threshold : ", torch.mean(prob))
-    print("threshold(new) : ", threshold)
-    print("prob size : ", prob.size())
-    if SR <= 0.1  or SR >= 1.0:
-        new_SR = np.clip(SR, 0.1 , 0.9)
-        print(f'WARNING: sample rate = {SR}, set to {new_SR}')
-        SR = new_SR
-    return SR, threshold
+            loss_ce = CEloss(outputs, labels)
+            penalty = conf_penalty(outputs)
+
+            if args.lossType == "mix":
+                L = loss_ce + (args.lambda_f * loss_nll)
+            elif args.lossType == "ce":
+                L = loss_ce
+            elif args.lossType == "nll":
+                L = (args.lambda_f * loss_nll)
+
+            optimizer.zero_grad()
+            optimizerFlow.zero_grad()
+            L.backward()
+            optimizer.step()
+            optimizerFlow.step()  
+            
+            if args.centering and updateCenter:
+                    _, _ = flowTrainer.get_pseudo_label(net, flowNet, inputs, inputs, std = args.pseudo_std, updateCnetering = True)
+
+            ## wandb
+            if (wandb != None):
+                logMsg = {}
+                logMsg["epoch"] = epoch
+                logMsg["loss/nll"] = loss_nll.item()
+                logMsg["loss/nll_max"] = (-log_p2).max()
+                logMsg["loss/nll_min"] = (-log_p2).min()
+                logMsg["loss/nll_var"] = (-log_p2).var()
+                wandb.log(logMsg)
+
+            sys.stdout.write('\r')
+            sys.stdout.write('%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t NLL-loss: %.4f'
+                    %(args.dataset, epoch, args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
+            
+            sys.stdout.flush()
 
 ## Calculate JSD
 def Calculate_JSD(epoch, net1, flowNet1, net2, flowNet2):
@@ -357,6 +383,7 @@ def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, nb_repeat
 
     logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
 
+
 ## Semi-Supervised Loss
 class SemiLoss(object):
     def __call__(self, outputs_x, targets_x, outputs_u, targets_u, epoch, warm_up, lambda_u, linear_u):
@@ -364,6 +391,7 @@ class SemiLoss(object):
         Lx = -torch.mean(torch.sum(F.log_softmax(outputs_x, dim=1) * targets_x, dim=1))
         Lu = torch.mean((probs_u - targets_u)**2)
         return Lx, Lu, linear_rampup(epoch, warm_up, lambda_u, 0, linear_u)
+
 
 
 log = open('./checkpoint/%s.txt'%args.id,'w')     
@@ -468,21 +496,23 @@ for epoch in range(0, args.num_epochs+1):
         val_loader = loader.run(0, 'val')
         flowTrainer.warmup_standard(epoch, net1, flowNet1, optimizer1, optimizerFlow1,warmup_trainloader)
         acc_val1, accs_val1 = eval("val_1", net1, flowNet1, val_loader)
-        if acc_val1 > best_acc[0]:
-            print('| Saving Best Net%d ...'%0)
-            best_acc[0] = acc_val1
-            save_model(0, net1, flowNet1)
+        save_model(0, net1, flowNet1)
+        # if acc_val1 > best_acc[0]:
+        #     print('| Saving Best Net%d ...'%0)
+        #     best_acc[0] = acc_val1
+        # save_model(0, net1, flowNet1)
         
         print('\nWarmup Net 2')
         warmup_trainloader = loader.run(0,'warmup')
         val_loader = loader.run(0, 'val')
         flowTrainer.warmup_standard(epoch, net2, flowNet2, optimizer2, optimizerFlow2,warmup_trainloader)
         acc_val2, accs_val2 = eval("val_2", net2, flowNet2, val_loader)
-
-        if acc_val2 > best_acc[1]:
-            print('| Saving Best Net%d ...'%2)
-            best_acc[1] = acc_val2
-            save_model(1, net2, flowNet2)
+        save_model(1, net2, flowNet2)
+        
+        # if acc_val2 > best_acc[1]:
+        #     print('| Saving Best Net%d ...'%2)
+        #     best_acc[1] = acc_val2
+        #     save_model(1, net2, flowNet2)
 
     else:
         run(0, net1, flowNet1, net2, flowNet2, optimizer1, optimizerFlow1, nb_repeat)

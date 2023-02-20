@@ -51,11 +51,18 @@ parser.add_argument('--dataset', default="Clothing1M", type=str)
 parser.add_argument('--resume', default=False, type=bool, help = 'Resume from the warmup checkpoint')
 parser.add_argument('--warm_up', default=0, type=int)
 parser.add_argument('--name', default="", type=str)
-parser.add_argument('--flow_modules', default="160-160-160-160", type=str)
+parser.add_argument('--flow_modules', default="14-14-14-14", type=str)
 parser.add_argument('--ema_decay', default=0.99, type=float, help='ema decay')
 parser.add_argument('--cond_size', default=512, type=int)
 parser.add_argument('--lambda_f', default=1., type=float, help='flow nll loss weight')
 # parser.add_argument('--lambda_u', default=30, type=float, help='weight for unsupervised loss')
+
+# Flow Centering
+parser.add_argument('--centering', default=False, type=bool, help='use centering')
+parser.add_argument('--center_momentum', default=0.95, type=float, help='use centering')
+
+parser.add_argument('--tol', default=1e-5, type=float, help='flow atol, rtol')
+
 args = parser.parse_args()
 
 # torch.cuda.set_device(args.gpuid)
@@ -80,12 +87,12 @@ def train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, u
 
     num_iter = num_iter_lab
     
-    for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x) in enumerate(labeled_trainloader):      
+    for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x, _) in enumerate(labeled_trainloader):      
         try:
-            inputs_u, inputs_u2, inputs_u3, inputs_u4 = next(unlabeled_train_iter)
+            inputs_u, inputs_u2, inputs_u3, inputs_u4, _ = next(unlabeled_train_iter)
         except:
             unlabeled_train_iter = iter(unlabeled_trainloader)
-            inputs_u, inputs_u2, inputs_u3, inputs_u4 = next(unlabeled_train_iter)
+            inputs_u, inputs_u2, inputs_u3, inputs_u4, _ = next(unlabeled_train_iter)
         
         batch_size = inputs_x.size(0)
 
