@@ -445,10 +445,11 @@ if __name__ == '__main__':
         # acc_n, confidence_n = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, noise_valloader, test_num = 5000)
         # print('\n ==================')
         
-        scheduler1.step()
-        schedulerFlow1.step()
-        scheduler2.step()
-        schedulerFlow2.step()
+        if not (args.dataset=='WebVision' or args.dataset == "mini_WebVision"):
+            scheduler1.step()
+            schedulerFlow1.step()
+            scheduler2.step()
+            schedulerFlow2.step()
 
         ## wandb
         if (wandb != None):
