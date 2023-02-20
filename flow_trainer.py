@@ -58,7 +58,7 @@ class FlowTrainer:
         return
 
     ## For Standard Training 
-    def warmup_standard(self, epoch, net, flowNet, optimizer, optimizerFlow, dataloader):
+    def warmup_standard(self, epoch, net, flowNet, optimizer, optimizerFlow, dataloader, updateCenter = False):
         flowNet.train()
         net.train()
         
@@ -104,6 +104,9 @@ class FlowTrainer:
             optimizer.step()
             optimizerFlow.step()  
             
+            if self.args.centering and updateCenter:
+                    _, _ = self.get_pseudo_label(net, flowNet, inputs, inputs, std = self.args.pseudo_std, updateCnetering = True)
+
             ## wandb
             if (wandb != None):
                 logMsg = {}
@@ -631,19 +634,17 @@ class FlowTrainer:
         return
     
     def sharpening(self, labels, T):
-        if self.args.sharpening == "DINO":
-            return self.sharpening_DINO(labels, T)
-        elif self.args.sharpening == "UNICON":
-            return self.sharpening_UNICON(labels, T)
-
-    def sharpening_DINO(self, labels, T):
-        labels_sp = labels / T
-        m = nn.Softmax(dim=0)
-        return m(labels_sp)
-
-    def sharpening_UNICON(self, labels, T):
         labels = labels**(1/T)
         return labels / labels.sum(dim=1, keepdim=True)
+
+    # def sharpening_DINO(self, labels, T):
+    #     labels_sp = labels / T
+    #     m = nn.Softmax(dim=0)
+    #     return m(labels_sp)
+
+    # def sharpening_UNICON(self, labels, T):
+    #     labels = labels**(1/T)
+    #     return labels / labels.sum(dim=1, keepdim=True)
 
     def entropy(self, p):
         return -p.mul((p + 1e-10).log2()).sum(dim=1)
