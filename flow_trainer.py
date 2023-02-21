@@ -361,7 +361,7 @@ class FlowTrainer:
         model = model.cuda()
         return model
 
-    def predict(self, flowNet, feature, mean = 0, std = 0.2, sample_n = 50, centering = False, normalize = True):
+    def predict(self, flowNet, feature, mean = 0, std = 0, sample_n = 50, centering = False, normalize = True):
         with torch.no_grad():
             batch_size = feature.size()[0]
             input_z = torch.normal(mean = mean, std = std, size=(batch_size, sample_n, self.args.num_class)).cuda()
@@ -670,10 +670,13 @@ class FlowTrainer:
         Update center used for teacher output.
         """
         # print("teacher_output", teacher_output[:10])
+        sample_n = teacher_output.size(1)
         batch_center = torch.sum(teacher_output, dim=0, keepdim=True)
+        batch_center = torch.sum(batch_center, dim=1, keepdim=False)
         # torch.distributed.all_reduce(batch_center)
         # batch_center = batch_center / (len(teacher_output) * dist.get_world_size())
         batch_center = batch_center / (len(teacher_output))
+        batch_center = batch_center / sample_n
         # ema update
         if len(self.args.gpuid) > 1:
             flowNet.module.center = flowNet.module.center * self.center_momentum + batch_center * (1 - self.center_momentum)
