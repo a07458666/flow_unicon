@@ -35,7 +35,7 @@ except ImportError:
 
 
 parser = argparse.ArgumentParser(description='PyTorch Clothing1M Training')
-parser.add_argument('--batch_size', default=64, type=int, help='train batchsize') 
+parser.add_argument('--batch_size', default=32, type=int, help='train batchsize') 
 parser.add_argument('--lr', '--learning_rate', default=0.02, type=float, help='initial learning rate')   ## Set the learning rate to 0.005 for faster training at the beginning
 parser.add_argument('--lr_f', default=2e-5, type=float, help='initial flow learning rate')
 parser.add_argument('--alpha', default=0.5, type=float, help='parameter for Beta')
@@ -53,7 +53,7 @@ parser.add_argument('--dataset', default="Clothing1M", type=str)
 parser.add_argument('--resume', default=False, type=bool, help = 'Resume from the warmup checkpoint')
 parser.add_argument('--warm_up', default=0, type=int)
 parser.add_argument('--name', default="", type=str)
-parser.add_argument('--flow_modules', default="128-128-128-128", type=str)
+parser.add_argument('--flow_modules', default="14-14-14-14", type=str)
 parser.add_argument('--tol', default=1e-5, type=float, help='flow atol, rtol')
 parser.add_argument('--cond_size', default=512, type=int)
 parser.add_argument('--lambda_f', default=1., type=float, help='flow nll loss weight')
