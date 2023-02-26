@@ -310,8 +310,8 @@ class InceptionResNetV2(nn.Module):
         
         logits_out = self.logits(x)
         ssl_out = self.bnl(self.projection_head(x))
-        feature_out = F.avg_pool1d(x, 4)
-        
+        # feature_out = F.avg_pool1d(x, 4)
+        feature_out = x
         if get_feature:
             return F.normalize(ssl_out, dim=1), logits_out, F.normalize(feature_out, dim=1)
         else:
