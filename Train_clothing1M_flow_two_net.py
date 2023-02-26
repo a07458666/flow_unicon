@@ -71,8 +71,8 @@ parser.add_argument('--Tf', default=0.7, type=float, help='flow sharpening tempe
 parser.add_argument('--sharpening', default="UNICON", type=str, choices=['DINO', 'UNICON'], help = 'sharpening method')
 
 # Flow Centering
-parser.add_argument('--centering', default=False, type=bool, help='use centering')
-parser.add_argument('--center_momentum', default=0.95, type=float, help='use centering')
+parser.add_argument('--centering', default=True, type=bool, help='use centering')
+parser.add_argument('--center_momentum', default=0.8, type=float, help='use centering')
 
 # Flow w_u
 parser.add_argument('--linear_u', default=16, type=float, help='weight for unsupervised loss')
@@ -171,58 +171,58 @@ def eval(evalType, net, flowNet, loader):
     return acc , accs
 
 ## For Standard Training 
-    def warmup_standard(epoch, net, flowNet, optimizer, optimizerFlow, dataloader, updateCenter = False):
-        flowNet.train()
-        net.train()
+def warmup_standard(epoch, net, flowNet, optimizer, optimizerFlow, dataloader, updateCenter = False):
+    flowNet.train()
+    net.train()
+    
+    num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
+    
+    for batch_idx, (inputs, labels, path) in enumerate(dataloader):
+        inputs, labels = inputs.cuda(), labels.cuda() 
+        labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
+
+        _, outputs, feature_flow = net(inputs, get_feature = True)
+        flow_labels = labels_one_hot.unsqueeze(1).cuda()
+        # logFeature(feature_flow)      
+
+        # == flow ==
+        loss_nll, log_p2 = flowTrainer.log_prob(flow_labels, feature_flow, flowNet)
+        # == flow end ===
+
+        loss_ce = CEloss(outputs, labels)
+        penalty = conf_penalty(outputs)
+
+        if args.lossType == "mix":
+            L = loss_ce + (args.lambda_f * loss_nll)
+        elif args.lossType == "ce":
+            L = loss_ce
+        elif args.lossType == "nll":
+            L = (args.lambda_f * loss_nll)
+
+        optimizer.zero_grad()
+        optimizerFlow.zero_grad()
+        L.backward()
+        optimizer.step()
+        optimizerFlow.step()  
         
-        num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
+        if args.centering and updateCenter:
+                _, _ = flowTrainer.get_pseudo_label(net, flowNet, inputs, inputs, std = args.pseudo_std, updateCnetering = True)
+
+        ## wandb
+        if (wandb != None):
+            logMsg = {}
+            logMsg["epoch"] = epoch
+            logMsg["loss/nll"] = loss_nll.item()
+            logMsg["loss/nll_max"] = (-log_p2).max()
+            logMsg["loss/nll_min"] = (-log_p2).min()
+            logMsg["loss/nll_var"] = (-log_p2).var()
+            wandb.log(logMsg)
+
+        sys.stdout.write('\r')
+        sys.stdout.write('%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t NLL-loss: %.4f'
+                %(args.dataset, epoch, args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
         
-        for batch_idx, (inputs, labels, path) in enumerate(dataloader):
-            inputs, labels = inputs.cuda(), labels.cuda() 
-            labels_one_hot = torch.nn.functional.one_hot(labels, args.num_class).type(torch.cuda.FloatTensor)
-
-            _, outputs, feature_flow = net(inputs, get_feature = True)
-            flow_labels = labels_one_hot.unsqueeze(1).cuda()
-            logFeature(feature_flow)      
-  
-            # == flow ==
-            loss_nll, log_p2 = flowTrainer.log_prob(flow_labels, feature_flow, flowNet)
-            # == flow end ===
-
-            loss_ce = CEloss(outputs, labels)
-            penalty = conf_penalty(outputs)
-
-            if args.lossType == "mix":
-                L = loss_ce + (args.lambda_f * loss_nll)
-            elif args.lossType == "ce":
-                L = loss_ce
-            elif args.lossType == "nll":
-                L = (args.lambda_f * loss_nll)
-
-            optimizer.zero_grad()
-            optimizerFlow.zero_grad()
-            L.backward()
-            optimizer.step()
-            optimizerFlow.step()  
-            
-            if args.centering and updateCenter:
-                    _, _ = flowTrainer.get_pseudo_label(net, flowNet, inputs, inputs, std = args.pseudo_std, updateCnetering = True)
-
-            ## wandb
-            if (wandb != None):
-                logMsg = {}
-                logMsg["epoch"] = epoch
-                logMsg["loss/nll"] = loss_nll.item()
-                logMsg["loss/nll_max"] = (-log_p2).max()
-                logMsg["loss/nll_min"] = (-log_p2).min()
-                logMsg["loss/nll_var"] = (-log_p2).var()
-                wandb.log(logMsg)
-
-            sys.stdout.write('\r')
-            sys.stdout.write('%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t NLL-loss: %.4f'
-                    %(args.dataset, epoch, args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
-            
-            sys.stdout.flush()
+        sys.stdout.flush()
 
 ## Calculate JSD
 def Calculate_JSD(epoch, net1, flowNet1, net2, flowNet2):
@@ -363,7 +363,7 @@ def save_model(idx, net, flowNet):
     torch.save(net.module.state_dict(), save_point)
     torch.save(flowNet.module.state_dict(), save_point_flow)
 
-def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, nb_repeat):
+def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, nb_repeat = 1):
     ## Calculate JSD values and Filter Rate
     print(f"Calculate JSD Net {idx}\n")
     prob, paths = Calculate_JSD(epoch, net1, flowNet1, net2, flowNet2)
@@ -481,42 +481,35 @@ best_acc = [0,0]
 SR = 0
 torch.backends.cudnn.benchmark = True
 acc_meter = torchnet.meter.ClassErrorMeter(topk=[1,5], accuracy=True)
-nb_repeat = 2
+nb_repeat = 10
 
 for epoch in range(0, args.num_epochs+1):
     startTime = time.time() 
     val_loader = loader.run(0, 'val')
+    test_loader = loader.run(0,'test')
     
     if epoch>100:
-        nb_repeat = 3  ## Change how many times we want to repeat on the same selection
+        nb_repeat = 5  ## Change how many times we want to repeat on the same selection
 
     if epoch<warm_up:             
         print('\nWarmup Net 1')
         warmup_trainloader = loader.run(0,'warmup')
-        val_loader = loader.run(0, 'val')
         flowTrainer.warmup_standard(epoch, net1, flowNet1, optimizer1, optimizerFlow1,warmup_trainloader)
-        acc_val1, accs_val1 = eval("val_1", net1, flowNet1, val_loader)
+        # acc_val1, accs_val1 = eval("val_1", net1, flowNet1, val_loader)
         save_model(0, net1, flowNet1)
-        # if acc_val1 > best_acc[0]:
-        #     print('| Saving Best Net%d ...'%0)
-        #     best_acc[0] = acc_val1
-        # save_model(0, net1, flowNet1)
         
         print('\nWarmup Net 2')
         warmup_trainloader = loader.run(0,'warmup')
-        val_loader = loader.run(0, 'val')
         flowTrainer.warmup_standard(epoch, net2, flowNet2, optimizer2, optimizerFlow2,warmup_trainloader)
-        acc_val2, accs_val2 = eval("val_2", net2, flowNet2, val_loader)
+        # acc_val2, accs_val2 = eval("val_2", net2, flowNet2, val_loader)
         save_model(1, net2, flowNet2)
         
-        # if acc_val2 > best_acc[1]:
-        #     print('| Saving Best Net%d ...'%2)
-        #     best_acc[1] = acc_val2
-        #     save_model(1, net2, flowNet2)
-
     else:
-        run(0, net1, flowNet1, net2, flowNet2, optimizer1, optimizerFlow1, nb_repeat)
-        run(1, net2, flowNet2, net1, flowNet1, optimizer2, optimizerFlow2, nb_repeat)
+        run(0, net1, flowNet1, net2, flowNet2, optimizer1, optimizerFlow1, nb_repeat = 1)
+        run(1, net2, flowNet2, net1, flowNet1, optimizer2, optimizerFlow2, nb_repeat = 1)
+        
+        if (epoch % nb_repeat) == 0:
+            load_model(net1, flowNet1, net2, flowNet2)
 
     scheduler1.step()
     scheduler2.step()
@@ -530,10 +523,6 @@ for epoch in range(0, args.num_epochs+1):
     # log.write('Validation Epoch:%d  Acc1:%.2f  Acc2:%.2f\n'%(epoch, acc_val1, acc_val2))
     
     acc_val, confidence_val  = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, val_loader)
-    
-    load_model(net1, flowNet1, net2, flowNet2)
- 
-    test_loader = loader.run(0,'test')
     acc, confidence  = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, test_loader)
 
     print(f"\n| Epoch:{epoch} \t  Test Acc: {acc:.2f} \n")
@@ -549,6 +538,4 @@ for epoch in range(0, args.num_epochs+1):
         logMsg["test/confidence"] = confidence
         logMsg["val/acc"] = acc_val
         logMsg["val/confidence_val"] = confidence_val
-
-        
         wandb.log(logMsg)
