@@ -5,14 +5,14 @@ num_class: 50
 lr: 1e-2
 lr_f: 2e-5
 batch_size: 32
-warm_up: 10
+warm_up: 20
 num_samples: 65944
 lambda_p: 50
 
 alpha: 0.5
-flow_modules: 32-32-32-32
+flow_modules: 64-64-64-64
 weight_decay: 1e-4
-cond_size: 384  #384 = 1536 / 4
+cond_size: 1536  #384 = 1536 / 4
 isRealTask: True
 centering: True
 center_momentum: 0.8
@@ -25,4 +25,4 @@ Tf_warmup: 1.0
 Tf: 0.7
 flow_sp: False
 jumpRestart: True
-clip_grad: False
+clip_grad: True
