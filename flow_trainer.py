@@ -140,8 +140,7 @@ class FlowTrainer:
             
             labels_one_hot = torch.nn.functional.one_hot(labels, self.args.num_class).type(torch.cuda.FloatTensor)
 
-            if self.args.warmup_mixup:
-                inputs, labels_one_hot = mix_match(inputs_weak, labels_one_hot, self.args.alpha)    
+            inputs, labels_one_hot = mix_match(inputs_weak, labels_one_hot, self.args.alpha)    
 
             _, outputs, feature_flow = net(inputs, get_feature = True)
             flow_labels = labels_one_hot.unsqueeze(1).cuda()
