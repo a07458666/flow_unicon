@@ -185,8 +185,6 @@ class NegEntropy(object):
 def create_model(args):
     if args.dataset=='WebVision':
         model = InceptionResNetV2(num_classes=args.num_class, feature_dim=args.cond_size)
-    elif args.dataset=="mini_WebVision":
-        model = ResNet18(num_classes=args.num_class, feature_dim=args.cond_size)
     else:
         model = ResNet18(num_classes=args.num_class, feature_dim=args.cond_size)
     model = model.cuda()
@@ -282,9 +280,6 @@ if __name__ == '__main__':
     elif args.dataset=='WebVision':
         from InceptionResNetV2 import *
         from dataloader_webvision import webvision_dataloader as dataloader
-    elif args.dataset=="mini_WebVision":
-        from PreResNet_tiny import *
-        from dataloader_webvision import webvision_dataloader as dataloader
 
     ## Checkpoint Location
     if  args.isRealTask:
@@ -329,7 +324,7 @@ if __name__ == '__main__':
             root_dir=model_save_loc, noise_file='%s/clean_%.4f_%s.npz'%(args.data_path,args.ratio, args.noise_mode))
     elif args.dataset == 'TinyImageNet':
         loader = dataloader(root=args.data_path, batch_size=args.batch_size, num_workers=args.num_workers, ratio = args.ratio, noise_mode = args.noise_mode, noise_file='%s/clean_%.2f_%s.npz'%(args.data_path,args.ratio, args.noise_mode))
-    elif args.dataset == 'WebVision' or args.dataset == 'mini_WebVision':
+    elif args.dataset == 'WebVision':
         loader = dataloader(batch_size=args.batch_size,num_workers=args.num_workers,root_dir=args.data_path, num_class=args.num_class)
 
     print('| Building net')
@@ -377,10 +372,10 @@ if __name__ == '__main__':
         _ = load_model(os.path.join(model_save_loc, "FlowNet_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1)
         start_epoch = load_model(os.path.join(model_save_loc, "FlowNet_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2)
         
-    elif args.pretrain != '':
-        start_epoch = 0
-        args.warm_up = 1
-        net.load_state_dict(torch.load(args.pretrain)['net'])
+    # elif args.pretrain != '':
+    #     start_epoch = 0
+    #     args.warm_up = 1
+    #     net.load_state_dict(torch.load(args.pretrain)['net'])
     else:
         start_epoch = 0
 
@@ -403,14 +398,21 @@ if __name__ == '__main__':
         eval_loader = loader.run(0, 'eval_train')
         warmup_trainloader = loader.run(0,'warmup')
 
-        if args.dataset == 'WebVision' or args.dataset == "mini_WebVision":
+        if args.dataset == 'WebVision':
             imagenet_valloader = loader.run(0.5, 'imagenet')
         
-        if args.dataset=='WebVision' or args.dataset == "mini_WebVision":
+        if args.dataset=='WebVision':
             manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, args.lr, args.lr_f, mid_warmup)
         print("Data Size : ", len(warmup_trainloader.dataset))
         ## Warmup Stage 
-        if epoch<args.warm_up:       
+        if args.dataset=='WebVision':
+            all_trainloader, _ = loader.run(1.0, 'train', prob = torch.zeros(args.num_samples))
+            print('\nWarmup Model Net 1 (SSL & mixup)')
+            flowTrainer.warmup_ssl_mixup(epoch, net1, flowNet1, optimizer1, optimizerFlow1, all_trainloader)
+            print('\nWarmup Model Net 2 (SSL & mixup)')
+            flowTrainer.warmup_ssl_mixup(epoch, net2, flowNet2, optimizer2, optimizerFlow2, all_trainloader)
+            
+        elif epoch<args.warm_up:       
             warmup_trainloader = loader.run(0, 'warmup')
 
             print('\nWarmup Model Net 1')
@@ -433,7 +435,7 @@ if __name__ == '__main__':
         
         ## Acc
         acc, confidence = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, test_loader)
-        if args.dataset == 'WebVision' or args.dataset == "mini_WebVision":
+        if args.dataset == 'WebVision':
             imagenet_acc, imagenet_confidence = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, imagenet_valloader)
         if args.testSTD:
             for test_std in [0.0, 0.2, 0.5, 0.8, 1.0]:
@@ -445,7 +447,7 @@ if __name__ == '__main__':
         # acc_n, confidence_n = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, noise_valloader, test_num = 5000)
         # print('\n ==================')
         
-        if not (args.dataset=='WebVision' or args.dataset == "mini_WebVision"):
+        if not (args.dataset=='WebVision'):
             scheduler1.step()
             schedulerFlow1.step()
             scheduler2.step()
@@ -458,7 +460,7 @@ if __name__ == '__main__':
             logMsg["runtime"] = time.time() - startTime
             logMsg["acc/test"] = acc
             logMsg["confidence score"] = confidence
-            if args.dataset == 'WebVision' or args.dataset == "mini_WebVision":
+            if args.dataset == 'WebVision':
                 logMsg["ImageNet/acc"] = imagenet_acc
                 logMsg["ImageNet/confidence score"] = imagenet_confidence
             wandb.log(logMsg)

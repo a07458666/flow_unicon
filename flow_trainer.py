@@ -64,10 +64,13 @@ class FlowTrainer:
         
         num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
         
+        # for batch_idx, (inputs, labels, blur) in enumerate(dataloader):
         for batch_idx, (inputs, labels) in enumerate(dataloader):
-            inputs, labels = inputs.cuda(), labels.cuda() 
+            inputs, labels = inputs.cuda(), labels.cuda()
             labels_one_hot = torch.nn.functional.one_hot(labels, self.args.num_class).type(torch.cuda.FloatTensor)
-
+            # if self.args.blur:
+            #     blur = blur.cuda()
+            #     labels_one_hot += blur
             if self.args.warmup_mixup:
                 inputs, labels_one_hot = mix_match(inputs, labels_one_hot, self.args.alpha)    
 
@@ -126,6 +129,82 @@ class FlowTrainer:
                         %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
             sys.stdout.flush()
 
+    def warmup_ssl_mixup(self, epoch, net, flowNet, optimizer, optimizerFlow, dataloader, updateCenter = False):
+        flowNet.train()
+        net.train()
+        
+        num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
+        
+        for batch_idx, (inputs_s1, inputs_s2, inputs_weak, _, labels, _, labels_x_o) in enumerate(dataloader): 
+            inputs_s1, inputs_s2, inputs_weak, labels = inputs_s1.cuda(), inputs_s2.cuda(), inputs_weak.cuda(), labels.cuda()
+            
+            labels_one_hot = torch.nn.functional.one_hot(labels, self.args.num_class).type(torch.cuda.FloatTensor)
+
+            if self.args.warmup_mixup:
+                inputs, labels_one_hot = mix_match(inputs_weak, labels_one_hot, self.args.alpha)    
+
+            _, outputs, feature_flow = net(inputs, get_feature = True)
+            flow_labels = labels_one_hot.unsqueeze(1).cuda()
+            logFeature(feature_flow)      
+  
+            # == flow ==
+            loss_nll, log_p2 = self.log_prob(flow_labels, feature_flow, flowNet)
+            # == flow end ===
+
+            loss_ce = self.CEloss(outputs, labels)
+            penalty = self.conf_penalty(outputs)
+            
+            # == Unsupervised Contrastive Loss ===
+            f1, _ = net(inputs_s1)
+            f2, _ = net(inputs_s2)
+            features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+            loss_simCLR = self.contrastive_criterion(features)
+            # == Unsupervised Contrastive Loss End ===
+
+            if self.args.lossType == "mix":
+                if self.args.noise_mode=='asym': # Penalize confident prediction for asymmetric noise
+                    L = loss_ce + penalty + (self.args.lambda_f * loss_nll) + loss_simCLR
+                else:
+                    L = loss_ce + (self.args.lambda_f * loss_nll) + loss_simCLR
+            elif self.args.lossType == "ce":
+                if self.args.noise_mode=='asym': # Penalize confident prediction for asymmetric noise
+                    L = loss_ce + penalty + loss_simCLR
+                else:
+                    L = loss_ce + loss_simCLR
+            elif self.args.lossType == "nll":
+                if self.args.noise_mode=='asym':
+                    L = penalty + (self.args.lambda_f * loss_nll) + loss_simCLR
+                else:
+                    L = (self.args.lambda_f * loss_nll) + loss_simCLR
+
+            optimizer.zero_grad()
+            optimizerFlow.zero_grad()
+            L.backward()
+            optimizer.step()
+            optimizerFlow.step()  
+            
+            if self.args.centering and updateCenter:
+                    _, _ = self.get_pseudo_label(net, flowNet, inputs, inputs, std = self.args.pseudo_std, updateCnetering = True)
+
+            ## wandb
+            if (wandb != None):
+                logMsg = {}
+                logMsg["epoch"] = epoch
+                logMsg["loss/nll"] = loss_nll.item()
+                logMsg["loss/nll_max"] = (-log_p2).max()
+                logMsg["loss/nll_min"] = (-log_p2).min()
+                logMsg["loss/nll_var"] = (-log_p2).var()
+                wandb.log(logMsg)
+
+            sys.stdout.write('\r')
+            if self.args.isRealTask:
+                sys.stdout.write('%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t NLL-loss: %.4f'
+                        %(self.args.dataset, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
+            else:
+                sys.stdout.write('%s:%.1f-%s | Epoch [%3d/%3d] Iter[%3d/%3d]\t NLL-loss: %.4f'
+                        %(self.args.dataset, self.args.ratio, self.args.noise_mode, epoch, self.args.num_epochs, batch_idx+1, num_iter, loss_nll.item()))
+            sys.stdout.flush()
+              
     def train(self, epoch, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader):
         net1.train()
         flowNet1.train()
@@ -135,6 +214,7 @@ class FlowTrainer:
         unlabeled_train_iter = iter(unlabeled_trainloader)
         num_iter = (len(labeled_trainloader.dataset)//labeled_trainloader.batch_size)+1 
 
+        # for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x, labels_x_o, blur) in enumerate(labeled_trainloader): 
         for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x, labels_x_o) in enumerate(labeled_trainloader): 
             try:
                 inputs_u, inputs_u2, inputs_u3, inputs_u4, labels_u_o = next(unlabeled_train_iter)
@@ -151,6 +231,10 @@ class FlowTrainer:
 
             inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x = inputs_x.cuda(), inputs_x2.cuda(), inputs_x3.cuda(), inputs_x4.cuda(), labels_x.cuda(), w_x.cuda()
             inputs_u, inputs_u2, inputs_u3, inputs_u4 = inputs_u.cuda(), inputs_u2.cuda(), inputs_u3.cuda(), inputs_u4.cuda()
+            
+            # if self.args.blur:
+            #     blur = blur.cuda()
+            #     labels_x += blur
 
             lamb_Tu = linear_rampup(epoch+batch_idx/num_iter, self.warm_up, self.args.lambda_p, self.args.Tf_warmup, self.args.Tf)
 
@@ -322,7 +406,6 @@ class FlowTrainer:
             else:
                 sys.stdout.write(f"{self.args.dataset}: {self.args.ratio:.2f}-{self.args.noise_mode} | Epoch [{epoch:3d}/{self.args.num_epochs:3d}] Iter[{batch_idx+1:3d}/{num_iter}]\t Contrastive Loss:{loss_simCLR.item():.4f} NLL(x) loss: {loss_nll_x.mean():.2f} NLL(u) loss: {loss_nll_u.mean().item():.2f}")
             sys.stdout.flush()
-        
 
     ## Calculate JSD
     def Calculate_JSD(self, net1, flowNet1, net2, flowNet2, num_samples, eval_loader):  

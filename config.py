@@ -68,6 +68,7 @@ def argumentParse(input_args = None):
     parser.add_argument('--warmup_mixup', default=False, type=bool, help = 'warmup use mixup')
     parser.add_argument('--testSTD', default=False, type=bool, help = 'test acc std 0.2~1.0')
     parser.add_argument('--jumpRestart', default=False, type=bool, help = 'jumpRestart webvision')
+    # parser.add_argument('--blur', default=False, type=bool, help = 'blur label')
 
     # Flow hyperparameters
     parser.add_argument('--flow_modules', default="8-8-8-8", type=str)
