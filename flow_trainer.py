@@ -135,8 +135,8 @@ class FlowTrainer:
         
         num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
         
-        for batch_idx, (inputs_w1, inputs_w2, inputs_s3, inputs_s4, labels, _, labels_x_o) in enumerate(dataloader): 
-            inputs_w1, inputs_w2, inputs_s3, inputs_s4, labels = inputs_w1.cuda(), inputs_w2.cuda(), inputs_s3.cuda(), inputs_s4.cuda(), labels 
+        for batch_idx, (inputs_w1, inputs_w2, inputs_s3, inputs_s4, labels) in enumerate(dataloader): 
+            inputs_w1, inputs_w2, inputs_s3, inputs_s4, labels = inputs_w1.cuda(), inputs_w2.cuda(), inputs_s3.cuda(), inputs_s4.cuda(), labels.cuda()
             
             labels_one_hot = torch.nn.functional.one_hot(labels, self.args.num_class).type(torch.cuda.FloatTensor)
 
@@ -154,18 +154,23 @@ class FlowTrainer:
             penalty = self.conf_penalty(outputs)
             
             # == Unsupervised Contrastive Loss ===
-            inputs_s34 = torch.cat([inputs_s3, inputs_s4], dim=0)
-            f, _ = net(inputs_s34)
-            f1 = f[:inputs_s3.size(0)]
-            f2 = f[inputs_s3.size(0):]
-            features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
-            loss_simCLR = self.contrastive_criterion(features)
+            # inputs_s34 = torch.cat([inputs_s3, inputs_s4], dim=0)
+            # f, _ = net(inputs_s34)
+            # f1 = f[:inputs_s3.size(0)]
+            # f2 = f[inputs_s3.size(0):]
+            # features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+            # loss_simCLR = self.contrastive_criterion(features)
+            # =================
+            # f1, _ = net(inputs_s3)
+            # f2, _ = net(inputs_s4)
+            # features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+            # loss_simCLR = self.contrastive_criterion(features)
             # == Unsupervised Contrastive Loss End ===
 
             if self.args.lossType == "mix":
                 L = loss_ce + (self.args.lambda_f * loss_nll)
             elif self.args.lossType == "ce":
-                L = loss_ce + loss_simCLR
+                L = loss_ce
             elif self.args.lossType == "nll":
                 L = (self.args.lambda_f * loss_nll)
 

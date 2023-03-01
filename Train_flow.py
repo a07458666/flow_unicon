@@ -404,13 +404,14 @@ if __name__ == '__main__':
         if args.dataset=='WebVision':
             manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, args.lr, args.lr_f, mid_warmup)
         print("Data Size : ", len(warmup_trainloader.dataset))
+        
         ## Warmup Stage 
         if args.dataset=='WebVision':
-            all_trainloader, _ = loader.run(1.0, 'train', prob = torch.zeros(args.num_samples))
+            ssl_trainloader = loader.run(0.0, 'ssl')
             print('\nWarmup Model Net 1 (SSL & mixup)')
-            flowTrainer.warmup_ssl_mixup(epoch, net1, flowNet1, optimizer1, optimizerFlow1, all_trainloader)
+            flowTrainer.warmup_ssl_mixup(epoch, net1, flowNet1, optimizer1, optimizerFlow1, ssl_trainloader)
             print('\nWarmup Model Net 2 (SSL & mixup)')
-            flowTrainer.warmup_ssl_mixup(epoch, net2, flowNet2, optimizer2, optimizerFlow2, all_trainloader)
+            flowTrainer.warmup_ssl_mixup(epoch, net2, flowNet2, optimizer2, optimizerFlow2, ssl_trainloader)
             
         elif epoch<args.warm_up:       
             warmup_trainloader = loader.run(0, 'warmup')

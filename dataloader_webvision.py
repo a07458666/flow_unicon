@@ -119,6 +119,8 @@ class webvision_dataset(Dataset):
             # print(self.class_ind)
             if self.mode == 'all':
                 self.train_imgs = train_imgs
+            elif self.mode == 'ssl':
+                self.train_imgs = train_imgs
             else:                   
                 if self.mode == "labeled":
                     pred_idx  = np.zeros(int(self.sample_ratio*num_samples))
@@ -339,12 +341,12 @@ class webvision_dataloader():
             return imagenet_loader
         
         elif mode=='ssl':
-            ssl_dataset = webvision_dataset(root_dir=self.root_dir, transform = self.transforms["labeled"], sample_ratio = SR, mode="all", num_class=self.num_class)                
-            trainloader = DataLoader(
+            ssl_dataset = webvision_dataset(root_dir=self.root_dir, transform = self.transforms["labeled"], sample_ratio = SR, mode="ssl", num_class=self.num_class)                
+            ssl_loader = DataLoader(
                 dataset=ssl_dataset, 
-                batch_size=self.batch_size*2,
+                batch_size=self.batch_size*4,
                 shuffle=True,
                 num_workers=self.num_workers,
                 pin_memory=True)                 
-            return trainloader
+            return ssl_loader
 
