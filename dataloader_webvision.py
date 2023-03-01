@@ -245,16 +245,16 @@ class webvision_dataloader():
         self.transforms = {
             "warmup": transform_weak_c1m,
             "unlabeled": [
-                        transform_strong_c1m_in,
-                        transform_strong_c1m_in,
                         transform_weak_c1m,
-                        transform_weak_c1m
+                        transform_weak_c1m,
+                        transform_strong_c1m_in,
+                        transform_strong_c1m_in
                     ],
             "labeled": [
-                        transform_strong_c1m_in,
-                        transform_strong_c1m_in,
                         transform_weak_c1m,
-                        transform_weak_c1m
+                        transform_weak_c1m,
+                        transform_strong_c1m_in,
+                        transform_strong_c1m_in
                     ],
             "test": None,
         }
