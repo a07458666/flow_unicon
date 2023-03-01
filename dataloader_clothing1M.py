@@ -246,7 +246,7 @@ class clothing_dataloader:
             )
             warmup_loader = DataLoader(
                 dataset=warmup_dataset,
-                batch_size=self.warmup_batch_size*2,
+                batch_size=self.warmup_batch_size,
                 shuffle=True,
                 num_workers=self.num_workers,
             )
@@ -305,7 +305,7 @@ class clothing_dataloader:
             )
             test_loader = DataLoader(
                 dataset=test_dataset,
-                batch_size=self.batch_size,
+                batch_size=self.batch_size * 4,
                 shuffle=False,
                 num_workers=self.num_workers,
             )
@@ -317,7 +317,7 @@ class clothing_dataloader:
             )
             val_loader = DataLoader(
                 dataset=val_dataset,
-                batch_size=self.batch_size,
+                batch_size=self.batch_size * 4,
                 shuffle=False,
                 num_workers=self.num_workers,
             )

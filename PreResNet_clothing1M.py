@@ -222,7 +222,7 @@ class ResNet(nn.Module):
         class_out = self.fc(x)
         feature_out = F.avg_pool1d(x, 4)
         # feature_out = self.feature_head(x)
-        feature_out = x
+        # feature_out = x
         if get_feature:
             return F.normalize(ssl_out, dim=1), class_out, F.normalize(feature_out, dim=1)
         else:
