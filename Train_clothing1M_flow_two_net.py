@@ -71,8 +71,8 @@ parser.add_argument('--Tf', default=0.7, type=float, help='flow sharpening tempe
 parser.add_argument('--sharpening', default="UNICON", type=str, choices=['DINO', 'UNICON'], help = 'sharpening method')
 
 # Flow Centering
-parser.add_argument('--centering', default=True, type=bool, help='use centering')
-parser.add_argument('--center_momentum', default=0.8, type=float, help='use centering')
+parser.add_argument('--centering', default=False, type=bool, help='use centering')
+parser.add_argument('--center_momentum', default=0.90, type=float, help='use centering')
 
 # Flow w_u
 parser.add_argument('--linear_u', default=16, type=float, help='weight for unsupervised loss')
@@ -363,7 +363,7 @@ def save_model(idx, net, flowNet):
     torch.save(net.module.state_dict(), save_point)
     torch.save(flowNet.module.state_dict(), save_point_flow)
 
-def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, nb_repeat = 1):
+def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, nb_repeat):
     ## Calculate JSD values and Filter Rate
     print(f"Calculate JSD Net {idx}\n")
     prob, paths = Calculate_JSD(epoch, net1, flowNet1, net2, flowNet2)
@@ -417,8 +417,10 @@ optimizerFlow1 = optim.SGD(flowNet1.parameters(), lr=args.lr_f, momentum=0.9, we
 optimizerFlow2 = optim.SGD(flowNet2.parameters(), lr=args.lr_f, momentum=0.9, weight_decay=1e-3)
 
 scheduler1 = optim.lr_scheduler.CosineAnnealingLR(optimizer1, 100, 1e-5)
+# scheduler1 = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer1, 10, 100, 1e-5)
 schedulerFlow1 = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow1, 100, args.lr_f / 100)
 scheduler2 = optim.lr_scheduler.CosineAnnealingLR(optimizer2, 100, 1e-5)
+# scheduler2 = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer2, 10, 100, 1e-5)
 schedulerFlow2 = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow2, 100, args.lr_f / 100)
 
 ## Cross-Entropy and Other Losses
@@ -481,35 +483,31 @@ best_acc = [0,0]
 SR = 0
 torch.backends.cudnn.benchmark = True
 acc_meter = torchnet.meter.ClassErrorMeter(topk=[1,5], accuracy=True)
-nb_repeat = 10
+nb_repeat = 2
 
 for epoch in range(0, args.num_epochs+1):
     startTime = time.time() 
     val_loader = loader.run(0, 'val')
+    warmup_trainloader = loader.run(0,'warmup')
     test_loader = loader.run(0,'test')
-    
+
     if epoch>100:
-        nb_repeat = 5  ## Change how many times we want to repeat on the same selection
+        nb_repeat = 3  ## Change how many times we want to repeat on the same selection
 
     if epoch<warm_up:             
         print('\nWarmup Net 1')
-        warmup_trainloader = loader.run(0,'warmup')
-        flowTrainer.warmup_standard(epoch, net1, flowNet1, optimizer1, optimizerFlow1,warmup_trainloader)
+        warmup_standard(epoch, net1, flowNet1, optimizer1, optimizerFlow1,warmup_trainloader)
         # acc_val1, accs_val1 = eval("val_1", net1, flowNet1, val_loader)
         save_model(0, net1, flowNet1)
         
         print('\nWarmup Net 2')
-        warmup_trainloader = loader.run(0,'warmup')
-        flowTrainer.warmup_standard(epoch, net2, flowNet2, optimizer2, optimizerFlow2,warmup_trainloader)
+        warmup_standard(epoch, net2, flowNet2, optimizer2, optimizerFlow2,warmup_trainloader)
         # acc_val2, accs_val2 = eval("val_2", net2, flowNet2, val_loader)
         save_model(1, net2, flowNet2)
         
     else:
-        run(0, net1, flowNet1, net2, flowNet2, optimizer1, optimizerFlow1, nb_repeat = 1)
-        run(1, net2, flowNet2, net1, flowNet1, optimizer2, optimizerFlow2, nb_repeat = 1)
-        
-        if (epoch % nb_repeat) == 0:
-            load_model(net1, flowNet1, net2, flowNet2)
+        run(0, net1, flowNet1, net2, flowNet2, optimizer1, optimizerFlow1, nb_repeat)
+        run(1, net2, flowNet2, net1, flowNet1, optimizer2, optimizerFlow2, nb_repeat)
 
     scheduler1.step()
     scheduler2.step()
@@ -523,6 +521,8 @@ for epoch in range(0, args.num_epochs+1):
     # log.write('Validation Epoch:%d  Acc1:%.2f  Acc2:%.2f\n'%(epoch, acc_val1, acc_val2))
     
     acc_val, confidence_val  = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, val_loader)
+    
+    load_model(net1, flowNet1, net2, flowNet2)
     acc, confidence  = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, test_loader)
 
     print(f"\n| Epoch:{epoch} \t  Test Acc: {acc:.2f} \n")
