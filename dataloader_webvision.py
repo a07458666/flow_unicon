@@ -205,6 +205,16 @@ class webvision_dataset(Dataset):
             image = Image.open(self.root+'val_images_256/'+img_path).convert('RGB')   
             img = self.transform(image) 
             return img, target
+    
+        elif self.mode=='ssl':
+            img_path = self.train_imgs[index]
+            target = self.train_labels[img_path] 
+            image = Image.open(self.root+img_path).convert('RGB')    
+            img1 = self.transform[0](image)
+            img2 = self.transform[1](image)
+            img3 = self.transform[2](image)
+            img4 = self.transform[3](image)
+            return img1, img2, img3, img4, target
            
     def __len__(self):
         if self.mode!='val':
@@ -326,5 +336,15 @@ class webvision_dataloader():
                 shuffle=False,
                 num_workers=self.num_workers,
                 pin_memory=True)               
-            return imagenet_loader     
+            return imagenet_loader
+        
+        elif mode=='ssl':
+            ssl_dataset = webvision_dataset(root_dir=self.root_dir, transform = self.transforms["labeled"], sample_ratio = SR, mode="all", num_class=self.num_class)                
+            trainloader = DataLoader(
+                dataset=ssl_dataset, 
+                batch_size=self.batch_size*2,
+                shuffle=True,
+                num_workers=self.num_workers,
+                pin_memory=True)                 
+            return trainloader
 

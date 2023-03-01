@@ -135,12 +135,12 @@ class FlowTrainer:
         
         num_iter = (len(dataloader.dataset)//dataloader.batch_size)+1
         
-        for batch_idx, (inputs_s1, inputs_s2, inputs_weak, _, labels, _, labels_x_o) in enumerate(dataloader): 
-            inputs_s1, inputs_s2, inputs_weak, labels = inputs_s1.cuda(), inputs_s2.cuda(), inputs_weak.cuda(), labels.cuda()
+        for batch_idx, (inputs_w1, inputs_w2, inputs_s3, inputs_s4, labels, _, labels_x_o) in enumerate(dataloader): 
+            inputs_w1, inputs_w2, inputs_s3, inputs_s4, labels = inputs_w1.cuda(), inputs_w2.cuda(), inputs_s3.cuda(), inputs_s4.cuda(), labels 
             
             labels_one_hot = torch.nn.functional.one_hot(labels, self.args.num_class).type(torch.cuda.FloatTensor)
 
-            inputs, labels_one_hot = mix_match(inputs_weak, labels_one_hot, self.args.alpha)    
+            inputs, labels_one_hot = mix_match(inputs_w1, labels_one_hot, self.args.alpha)    
 
             _, outputs, feature_flow = net(inputs, get_feature = True)
             flow_labels = labels_one_hot.unsqueeze(1).cuda()
@@ -154,27 +154,20 @@ class FlowTrainer:
             penalty = self.conf_penalty(outputs)
             
             # == Unsupervised Contrastive Loss ===
-            f1, _ = net(inputs_s1)
-            f2, _ = net(inputs_s2)
+            inputs_s34 = torch.cat([inputs_s3, inputs_s4], dim=0)
+            f, _ = net(inputs_s34)
+            f1 = f[:inputs_s3.size(0)]
+            f2 = f[inputs_s3.size(0):]
             features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
             loss_simCLR = self.contrastive_criterion(features)
             # == Unsupervised Contrastive Loss End ===
 
             if self.args.lossType == "mix":
-                if self.args.noise_mode=='asym': # Penalize confident prediction for asymmetric noise
-                    L = loss_ce + penalty + (self.args.lambda_f * loss_nll) + loss_simCLR
-                else:
-                    L = loss_ce + (self.args.lambda_f * loss_nll) + loss_simCLR
+                L = loss_ce + (self.args.lambda_f * loss_nll)
             elif self.args.lossType == "ce":
-                if self.args.noise_mode=='asym': # Penalize confident prediction for asymmetric noise
-                    L = loss_ce + penalty + loss_simCLR
-                else:
-                    L = loss_ce + loss_simCLR
+                L = loss_ce + loss_simCLR
             elif self.args.lossType == "nll":
-                if self.args.noise_mode=='asym':
-                    L = penalty + (self.args.lambda_f * loss_nll) + loss_simCLR
-                else:
-                    L = (self.args.lambda_f * loss_nll) + loss_simCLR
+                L = (self.args.lambda_f * loss_nll)
 
             optimizer.zero_grad()
             optimizerFlow.zero_grad()
