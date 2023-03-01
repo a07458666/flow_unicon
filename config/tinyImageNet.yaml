@@ -1,5 +1,6 @@
 data_path: './data/tiny-imagenet-200'
 dataset: 'TinyImageNet'
+alpha: 0.5
 num_epochs: 200
 num_class: 200
 lr: 4e-2
@@ -7,23 +8,14 @@ lr_f: 4e-5
 batch_size: 256
 warm_up: 15
 num_samples: 100000
-lambda_p: 100
-
-alpha: 0.5
 flow_modules: 160-160-160-160
 weight_decay: 5e-4
-decay: 0.99
 lambda_u: 50
 linear_u: 16
 cond_size: 512 # 2048/ 4
 centering: True
 center_momentum: 0.8
-decay: 0.99
-
 T: 0.2
-
-sharpening: 'UNICON'
-Tf_warmup: 1.0
-Tf: 0.7
 flow_sp: False
 clip_grad: True
+d_u: 0.7
