@@ -287,12 +287,17 @@ def load_model(model_save_loc, net, flowNet, flowTrainer, best=False):
     flowTrainer.flowNet_ema.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_ema), map_location=device)['net'])
     return
 
-def save_model(net, flowNet, epoch, acc = 0):
+def save_model(net, flowNet, epoch, acc = 0, last = False):
     if epoch <args.warm_up:
         model_name = 'Net_warmup.pth'
         model_name_flow = 'FlowNet_warmup.pth'
         model_name_ema = 'Net_warmup_ema.pth'
         model_name_flow_ema = 'FlowNet_warmup_ema.pth'
+    elif last:
+        model_name = 'Net_last.pth'
+        model_name_flow = 'FlowNet_last.pth'
+        model_name_ema = 'Net_ema_last.pth'
+        model_name_flow_ema = 'FlowNet_ema_last.pth'
     else:
         model_name = 'Net.pth'
         model_name_flow = 'FlowNet.pth'
@@ -549,7 +554,6 @@ if __name__ == '__main__':
                 logMsg["confidence score(mix)"] = confidence_mix
             wandb.log(logMsg)
         if acc > best_acc:
-
             save_model(net, flowNet, epoch, acc)
             best_acc = acc
         if acc < best_acc - 10.:

@@ -125,10 +125,10 @@ class FlowTrainer:
 
         for batch_idx, (inputs_x, inputs_x2, inputs_x3, inputs_x4, labels_x, w_x, labels_x_o) in enumerate(labeled_trainloader): 
             try:
-                inputs_u, inputs_u2, inputs_u3, inputs_u4, labels_u_o = unlabeled_train_iter.next()
+                inputs_u, inputs_u2, inputs_u3, inputs_u4, labels_u_o = next(unlabeled_train_iter)
             except:
                 unlabeled_train_iter = iter(unlabeled_trainloader)
-                inputs_u, inputs_u2, inputs_u3, inputs_u4, labels_u_o = unlabeled_train_iter.next()
+                inputs_u, inputs_u2, inputs_u3, inputs_u4, labels_u_o = next(unlabeled_train_iter)
             
             batch_size = inputs_x.size(0)
 
