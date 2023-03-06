@@ -371,9 +371,10 @@ class FlowTrainer:
 
                 logMsg["loss/simCLR"] = loss_simCLR.item()
 
-                logMsg["feature_grad/mean"] = flow_feature.grad.mean().item()
-                logMsg["feature_grad/max"] = flow_feature.grad.max().item()
-                logMsg["feature_grad/min"] = flow_feature.grad.min().item()
+                if self.args.lossType == "mix" or self.args.lossType == "nll":
+                    logMsg["feature_grad/mean"] = flow_feature.grad.mean().item()
+                    logMsg["feature_grad/max"] = flow_feature.grad.max().item()
+                    logMsg["feature_grad/min"] = flow_feature.grad.min().item()
                 
                 if not self.args.isRealTask:           
                     logMsg["label_quality/unlabel_pseudo_JSD_mean"] = u_sources_pseudo.mean().item()
