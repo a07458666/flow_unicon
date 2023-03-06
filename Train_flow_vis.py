@@ -15,6 +15,7 @@ import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 import torchvision
 import torchvision.models as models
+from torch.utils.data import Dataset, DataLoader
 
 # 
 import time
@@ -23,11 +24,16 @@ from flow_trainer import FlowTrainer
 from tqdm import tqdm
 from config import argumentParse
 
-try:
-    import wandb
-except ImportError:
-    wandb = None
-    logger.info("Install Weights & Biases for experiment logging via 'pip install wandb' (recommended)")
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+
+
+# try:
+#     import wandb
+# except ImportError:
+#     wandb = None
+#     logger.info("Install Weights & Biases for experiment logging via 'pip install wandb' (recommended)")
+wandb = None
 
 ## For plotting the logs
 # import wandb
@@ -194,64 +200,154 @@ def load_model(path, net, optimizer, scheduler):
     device = torch.device('cuda', torch.cuda.current_device())
     net_pth = torch.load(path, map_location=device)
     net.load_state_dict(net_pth['net'])
-    optimizer.load_state_dict(net_pth['optimizer'])
-    scheduler.load_state_dict(net_pth['scheduler'])
+    # optimizer.load_state_dict(net_pth['optimizer'])
+    # scheduler.load_state_dict(net_pth['scheduler'])
 
     model_epoch = net_pth['epoch']
     return model_epoch
 
 
-def save_model(path, net, optimizer, scheduler, acc):
-    if len(args.gpuid) > 1:
-        net_state_dict = net.module.state_dict()
-    else:
-        net_state_dict = net.state_dict()
+# def save_model(path, net, optimizer, scheduler, acc):
+#     if len(args.gpuid) > 1:
+#         net_state_dict = net.module.state_dict()
+#     else:
+#         net_state_dict = net.state_dict()
 
-    checkpoint = {
-        'net': net_state_dict,
-        'optimizer': optimizer.state_dict(),
-        'scheduler': scheduler.state_dict(),
-        'Noise_Ratio': args.ratio,
-        'Optimizer': 'SGD',
-        'Noise_mode': args.noise_mode,
-        'Accuracy': acc,
-        'Dataset': args.dataset,
-        'Batch Size': args.batch_size,
-        'epoch': epoch,
-    }
-    torch.save(checkpoint, path)
-    return 
+#     checkpoint = {
+#         'net': net_state_dict,
+#         'optimizer': optimizer.state_dict(),
+#         'scheduler': scheduler.state_dict(),
+#         'Noise_Ratio': args.ratio,
+#         'Optimizer': 'SGD',
+#         'Noise_mode': args.noise_mode,
+#         'Accuracy': acc,
+#         'Dataset': args.dataset,
+#         'Batch Size': args.batch_size,
+#         'epoch': epoch,
+#     }
+#     torch.save(checkpoint, path)
+#     return 
 
-def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow):
-    ## Calculate JSD values and Filter Rate
-    print("Calculate JSD Net ", str(idx), "\n")
-    prob = flowTrainer.Calculate_JSD(net1, flowNet1, net2, flowNet2, args.num_samples, eval_loader)
-    SR , threshold = Selection_Rate(args, prob)
+def drawLabelHist(name, labels):
+    # langs=['0','1','2','3','4','5','6','7','8','9']
+    plt.ylim(0, 1)
+    plt.xlim(-0.7, 9.7)
+    x = np.arange(args.num_class)
+    width = 1 / (args.num_class + 1)
+    for idx, label in enumerate(labels):
+        offset = (width * idx) - 0.5
+        plt.bar(x + offset, label, width=width)
     
-    print('Train Net ', str(idx), '\n')
-    labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection
+    axes = plt.gca()
+    axes.xaxis.set_major_locator(ticker.MultipleLocator(1))
+    axes.yaxis.set_minor_locator(ticker.MultipleLocator(0.1))
     
-    if args.isRealTask:
-        logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
-    else:
-        logJSD(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
+    plt.title(f"{args.noise_mode}_{args.ratio}_{args.lossType}_{name}")
+    plt.show()  
+    plt.savefig(f"./vis/label_distribution_{args.noise_mode}_{args.ratio}_{args.lossType}_{name}.png")
 
-    flowTrainer.train(epoch, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
+def drawLabelHistOne(name, labels):
+    x = np.arange(args.num_class)
+    for idx, label in enumerate(labels):
+        plt.clf()
+        plt.ylim(0, 1)
+        plt.xlim(-0.7, 9.7)
+        plt.bar(x, label)
+        axes = plt.gca()
+        axes.xaxis.set_major_locator(ticker.MultipleLocator(1))
+        axes.yaxis.set_minor_locator(ticker.MultipleLocator(0.1))
+    
+        plt.title(f"{args.noise_mode}_{args.ratio}_{args.lossType}_{name}_Idx_{idx}")
+        plt.show()  
+        plt.savefig(f"./vis/probability_{args.noise_mode}_{args.ratio}_{args.lossType}_{name}_Idx_{idx}.png")
 
-def manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, init_lr, init_flow_lr, mid_warmup = 25):
-    lr = init_lr
-    lr_flow = init_flow_lr
-    if epoch >= 60 or (epoch+1)%mid_warmup==0:
-        lr /= 10
-        lr_flow /= 10
-    for param_group in optimizer1.param_groups:
-        param_group['lr'] = lr       
-    for param_group in optimizer2.param_groups:
-        param_group['lr'] = lr 
-    for param_group in optimizerFlow1.param_groups:
-        param_group['lr'] = lr_flow       
-    for param_group in optimizerFlow2.param_groups:
-        param_group['lr'] = lr_flow  
+def vis_distribution(net1, flowNet1, net2, flowNet2, loader):
+    net1.eval()
+    flowNet1.eval()
+    net2.eval()
+    flowNet2.eval()
+    
+    np.set_printoptions(precision=2)
+    classes_labels_vec = []
+    classes_labels_correct_vec = []
+    
+    
+    class_ind = {}
+    # clean label
+    for kk in range(args.num_class):
+        class_ind[kk] = [i for i,x in enumerate(loader.dataset.origin_label) if x==kk] 
+    
+    # noise label
+    # class_ind = loader.dataset.class_ind
+    
+    for class_num in range(args.num_class):
+        labels_vec = []
+        labels_correct_vec = []
+        print(f"class : {class_num } num : {len(class_ind[class_num])}")
+
+
+        classes_idx = loader.dataset.class_ind[class_num]
+        
+        sampler = torch.utils.data.sampler.SubsetRandomSampler(classes_idx)
+
+        sampler_loader = DataLoader(
+                dataset=loader.dataset, 
+                batch_size=500,
+                sampler=sampler,
+                num_workers=16,
+                drop_last= True)
+        
+        # for idx in classes_idx:
+        #     input = loader.dataset.train_data[idx].cuda()
+        #     print(loader.dataset.train_data[idx].shape)
+        #     print("classes : ", loader.dataset.noise_label[idx])
+        with torch.no_grad():
+            for batch_idx, (inputs, labels, blur) in enumerate(sampler_loader):
+                inputs = inputs.cuda()
+                labels = labels.cuda()
+                # print(labels[:10])
+                _, outputs_1, features_1 = net1(inputs, get_feature = True)
+                _, outputs_2, features_2 = net2(inputs, get_feature = True)
+                
+                flow_outputs_1 = flowTrainer.predict(flowNet1, features_1)
+                flow_outputs_2 = flowTrainer.predict(flowNet2, features_2)
+                
+                if args.lossType == "mix":
+                    out = ((torch.softmax(outputs_1, dim=1) + torch.softmax(outputs_2, dim=1) + flow_outputs_1 + flow_outputs_2) / 4)
+                elif args.lossType == "nll":
+                    out = ((flow_outputs_1 + flow_outputs_2) / 2)
+                elif args.lossType == "ce":
+                    out = ((torch.softmax(outputs_1, dim=1) + torch.softmax(outputs_2, dim=1)) / 2)
+                
+                labels_vec.append(out)
+                prob, predicted = torch.max(out, 1)
+                labels_correct_vec.append(out[predicted == class_num])
+                
+                # print("net1 : ", flow_outputs_1[:10].cpu().numpy())
+                # print("net2 : ", flow_outputs_2[:10].cpu().numpy())
+                # print("net_mix : ", ((flow_outputs_1 + flow_outputs_2) / 2)[:10].cpu().numpy())
+                # print("out : ", out[:10].cpu().numpy())
+                # print("out correct: ", out[predicted == class_num][:10].cpu().numpy())
+                
+        labels_vec = torch.cat(labels_vec, dim=0)
+        labels_var = torch.var(input = labels_vec, dim=0)
+        print("labels_var", labels_var)
+        labels_dis = labels_vec.sum(dim=0, keepdim=False) / labels_vec.size(0)
+        print("labels_dis : ", labels_dis)
+        classes_labels_vec.append(labels_dis.cpu().numpy())
+        
+        labels_correct_vec = torch.cat(labels_correct_vec, dim=0)
+        # labels_correct_var = torch.var(input = labels_correct_vec, dim=0)
+        # print("labels_var", labels_var)
+        labels_correct_dis = labels_correct_vec.sum(dim=0, keepdim=False) / labels_correct_vec.size(0)
+        print("label_correct_dis : ", labels_correct_dis)
+        classes_labels_correct_vec.append(labels_correct_dis.cpu().numpy())
+        
+    drawLabelHist("all", classes_labels_vec)
+    drawLabelHist("correct", classes_labels_correct_vec)
+    drawLabelHistOne("all", classes_labels_vec)
+    return
+
 
 if __name__ == '__main__':
     ## Arguments to pass 
@@ -353,138 +449,32 @@ if __name__ == '__main__':
         schedulerFlow1 = optim.lr_scheduler.ExponentialLR(optimizerFlow1, 0.98)
         scheduler2 = optim.lr_scheduler.ExponentialLR(optimizer2, 0.98)
         schedulerFlow2 = optim.lr_scheduler.ExponentialLR(optimizerFlow2, 0.98)
-    elif args.dataset=='WebVision':
-        scheduler1 = optim.lr_scheduler.ExponentialLR(optimizer1, 0.98)
-        schedulerFlow1 = optim.lr_scheduler.ExponentialLR(optimizerFlow1, 0.98)
-        scheduler2 = optim.lr_scheduler.ExponentialLR(optimizer2, 0.98)
-        schedulerFlow2 = optim.lr_scheduler.ExponentialLR(optimizerFlow2, 0.98)
     else:
         scheduler1 = optim.lr_scheduler.CosineAnnealingLR(optimizer1, args.num_epochs, args.lr / 1e2)
         schedulerFlow1 = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow1, args.num_epochs, args.lr_f / 1e2)
         scheduler2 = optim.lr_scheduler.CosineAnnealingLR(optimizer2, args.num_epochs, args.lr / 1e2)
         schedulerFlow2 = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow2, args.num_epochs, args.lr_f / 1e2)
 
+    epoch = 0
     ## Resume from the warmup checkpoint 
     if args.resume:
         _ = load_model(os.path.join(model_save_loc, "Net_warmup_1.pth"), net1, optimizer1, scheduler1)
         _ = load_model(os.path.join(model_save_loc, "Net_warmup_2.pth"), net2, optimizer2, scheduler2)
         _ = load_model(os.path.join(model_save_loc, "FlowNet_warmup_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1)
-        start_epoch = load_model(os.path.join(model_save_loc, "FlowNet_warmup_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2)
+        epoch = load_model(os.path.join(model_save_loc, "FlowNet_warmup_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2)
 
     elif args.resume_best:
         _ = load_model(os.path.join(model_save_loc, "Net_1.pth"), net1, optimizer1, scheduler1)
         _ = load_model(os.path.join(model_save_loc, "Net_2.pth"), net2, optimizer2, scheduler2)
         _ = load_model(os.path.join(model_save_loc, "FlowNet_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1)
-        start_epoch = load_model(os.path.join(model_save_loc, "FlowNet_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2)
-        
-    # elif args.pretrain != '':
-    #     start_epoch = 0
-    #     args.warm_up = 1
-    #     net.load_state_dict(torch.load(args.pretrain)['net'])
-    else:
-        start_epoch = 0
-
-    # gpus
-    if len(args.gpuid) > 1:
-        net1 = nn.DataParallel(net1)
-        flowNet1 = nn.DataParallel(flowNet1)
-        net2 = nn.DataParallel(net2)
-        flowNet2 = nn.DataParallel(flowNet2)
-
-    best_acc = 0
-
-    if args.jumpRestart:
-        mid_warmup = 25
-
-    ## Warmup and SSL-Training 
-    for epoch in range(start_epoch,args.num_epochs+1):
-        startTime = time.time() 
-        test_loader = loader.run(0, 'val')
-        eval_loader = loader.run(0, 'eval_train')
-        warmup_trainloader = loader.run(0,'warmup')
-
-        if args.dataset == 'WebVision':
-            imagenet_valloader = loader.run(0.5, 'imagenet')
-        
-        # if args.dataset=='WebVision':
-        #     manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, args.lr, args.lr_f, mid_warmup)
-        print("Data Size : ", len(warmup_trainloader.dataset))
-        
-        ## Warmup Stage 
-        # if args.dataset=='WebVision':
-        #    ssl_trainloader = loader.run(0.0, 'ssl')
-        #    print('\nWarmup Model Net 1 (SSL & mixup)')
-        #    flowTrainer.warmup_ssl_mixup(epoch, net1, flowNet1, optimizer1, optimizerFlow1, ssl_trainloader)
-        #    print('\nWarmup Model Net 2 (SSL & mixup)')
-        #    flowTrainer.warmup_ssl_mixup(epoch, net2, flowNet2, optimizer2, optimizerFlow2, ssl_trainloader)
-            
-        #elif epoch<args.warm_up:
-        if epoch<args.warm_up:
-            warmup_trainloader = loader.run(0, 'warmup')
-
-            print('\nWarmup Model Net 1')
-            flowTrainer.warmup_standard(epoch, net1, flowNet1, optimizer1, optimizerFlow1, warmup_trainloader)
-
-            print('\nWarmup Model Net 2')
-            flowTrainer.warmup_standard(epoch, net2, flowNet2, optimizer2, optimizerFlow2, warmup_trainloader)   
-        ## Jump-Restart
-        elif args.jumpRestart and (epoch+1) % mid_warmup == 0:
-            manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, args.lr, args.lr_f, mid_warmup)
-
-            warmup_trainloader = loader.run(0.5, 'warmup')
-            print('Mid-training Warmup Net1')
-            flowTrainer.warmup_standard(epoch, net1, flowNet1, optimizer1, optimizerFlow1, warmup_trainloader, updateCenter=True)   
-            print('\nMid-training Warmup Net2')
-            flowTrainer.warmup_standard(epoch, net2, flowNet2, optimizer2, optimizerFlow2, warmup_trainloader, updateCenter=True)   
-        else:
-            run(1, net1, flowNet1, net2, flowNet2, optimizer1, optimizerFlow1)
-            run(2, net2, flowNet2, net1, flowNet1, optimizer2, optimizerFlow2)
-        
-        ## Acc
-        acc, confidence = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, test_loader)
-        if args.dataset == 'WebVision':
-            imagenet_acc, imagenet_confidence = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, imagenet_valloader)
-        if args.testSTD:
-            for test_std in [0.0, 0.2, 0.5, 0.8, 1.0]:
-                flowTrainer.testSTD(epoch, net1, flowNet1, net2, flowNet2, test_loader, sample_std = test_std)
-
-        ## Acc(Train Dataset)
-        # print('\n =====Noise Acc====')
-        # noise_valloader = loader.run(0, 'val_noise')
-        # acc_n, confidence_n = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, noise_valloader, test_num = 5000)
-        # print('\n ==================')
-        
-        scheduler1.step()
-        schedulerFlow1.step()
-        scheduler2.step()
-        schedulerFlow2.step()
-
-        ## wandb
-        if (wandb != None):
-            logMsg = {}
-            logMsg["epoch"] = epoch
-            logMsg["runtime"] = time.time() - startTime
-            logMsg["acc/test"] = acc
-            logMsg["confidence score"] = confidence
-            if args.dataset == 'WebVision':
-                logMsg["ImageNet/acc"] = imagenet_acc
-                logMsg["ImageNet/confidence score"] = imagenet_confidence
-            wandb.log(logMsg)
-        
-        if args.save_last:
-            save_model(os.path.join(model_save_loc, "Net_last_1.pth"), net1, optimizer1, scheduler1, acc)
-            save_model(os.path.join(model_save_loc, "Net_last_2.pth"), net2, optimizer2, scheduler2, acc)
-            save_model(os.path.join(model_save_loc, "FlowNet_last_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1, acc)
-            save_model(os.path.join(model_save_loc, "FlowNet_last_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2, acc)
-        if acc > best_acc:
-            if epoch <args.warm_up:
-                save_model(os.path.join(model_save_loc, "Net_warmup_1.pth"), net1, optimizer1, scheduler1, acc)
-                save_model(os.path.join(model_save_loc, "Net_warmup_2.pth"), net2, optimizer2, scheduler2, acc)
-                save_model(os.path.join(model_save_loc, "FlowNet_warmup_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1, acc)
-                save_model(os.path.join(model_save_loc, "FlowNet_warmup_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2, acc)
-            else:
-                save_model(os.path.join(model_save_loc, "Net_1.pth"), net1, optimizer1, scheduler1, acc)
-                save_model(os.path.join(model_save_loc, "Net_2.pth"), net2, optimizer2, scheduler2, acc)
-                save_model(os.path.join(model_save_loc, "FlowNet_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1, acc)
-                save_model(os.path.join(model_save_loc, "FlowNet_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2, acc)
-            best_acc = acc
+        epoch = load_model(os.path.join(model_save_loc, "FlowNet_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2)
+    
+    
+    eval_loader = loader.run(0, 'eval_train')
+    vis_distribution(net1, flowNet1, net2, flowNet2, eval_loader)
+    
+    # prob = flowTrainer.Calculate_JSD(net1, flowNet1, net2, flowNet2, args.num_samples, eval_loader)
+    
+    # SR , threshold = Selection_Rate(args, prob)
+    
+    # labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob) # Uniform Selection

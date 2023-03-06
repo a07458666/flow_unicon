@@ -371,9 +371,10 @@ class FlowTrainer:
 
                 logMsg["loss/simCLR"] = loss_simCLR.item()
 
-                logMsg["feature_grad/mean"] = flow_feature.grad.mean().item()
-                logMsg["feature_grad/max"] = flow_feature.grad.max().item()
-                logMsg["feature_grad/min"] = flow_feature.grad.min().item()
+                if self.args.lossType == "mix" or self.args.lossType == "nll":
+                    logMsg["feature_grad/mean"] = flow_feature.grad.mean().item()
+                    logMsg["feature_grad/max"] = flow_feature.grad.max().item()
+                    logMsg["feature_grad/min"] = flow_feature.grad.min().item()
                 
                 if not self.args.isRealTask:           
                     logMsg["label_quality/unlabel_pseudo_JSD_mean"] = u_sources_pseudo.mean().item()
@@ -750,13 +751,14 @@ class FlowTrainer:
         Update center used for teacher output.
         """
         # print("teacher_output", teacher_output[:10])
-        sample_n = teacher_output.size(1)
-        batch_center = torch.sum(teacher_output, dim=0, keepdim=True)
-        batch_center = torch.sum(batch_center, dim=1, keepdim=False)
+        # sample_n = teacher_output.size(1)
+        # batch_center = torch.sum(teacher_output, dim=0, keepdim=True)
+        # batch_center = torch.sum(batch_center, dim=1, keepdim=False)
         # torch.distributed.all_reduce(batch_center)
         # batch_center = batch_center / (len(teacher_output) * dist.get_world_size())
-        batch_center = batch_center / (len(teacher_output))
-        batch_center = batch_center / sample_n
+        # batch_center = batch_center / (len(teacher_output))
+        # batch_center = batch_center / sample_n
+        batch_center = teacher_output.mean(dim=0).mean(dim=0, keepdim=True)
         # ema update
         if len(self.args.gpuid) > 1:
             flowNet.module.center = flowNet.module.center * self.center_momentum + batch_center * (1 - self.center_momentum)

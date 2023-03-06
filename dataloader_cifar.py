@@ -33,6 +33,7 @@ class cifar_dataset(Dataset):
         self.sample_ratio = sample_ratio
         self.transform = transform
         self.mode = mode
+        # self.blur_label = []
         root_dir_save = root_dir
 
         if dataset == 'cifar10':
@@ -80,6 +81,9 @@ class cifar_dataset(Dataset):
                 train_label = train_dic['fine_labels']
             train_data = train_data.reshape((50000, 3, 32, 32))
             train_data = train_data.transpose((0, 2, 3, 1))
+            
+            # for i in range(50000):
+            #     self.blur_label.append(torch.abs(torch.normal(mean=0, std=torch.tensor([0.1] * num_class))))
             
             if os.path.exists(noise_file):             
                 noise_label = np.load(noise_file)['label']
@@ -131,7 +135,7 @@ class cifar_dataset(Dataset):
             if self.mode == 'all' or self.mode == 'ssl':
                 self.train_data = train_data
                 self.noise_label = noise_label
-                
+                self.origin_label = train_label   # original label
             else:
                 save_file = 'Clean_index_'+ str(dataset) + '_' +str(noise_mode) +'_' + str(self.r) + '.npz'
                 save_file = os.path.join(root_dir_save, save_file)
@@ -178,6 +182,7 @@ class cifar_dataset(Dataset):
     def __getitem__(self, index):
         if self.mode=='labeled':
             img, target, prob = self.train_data[index], self.noise_label[index], self.probability[index]
+            # blur = self.blur_label[index]
             o_target = self.origin_label[index]
             image = Image.fromarray(img)
             img1 = self.transform[0](image)
@@ -185,7 +190,7 @@ class cifar_dataset(Dataset):
             img3 = self.transform[2](image)
             img4 = self.transform[3](image)
 
-            return img1, img2, img3, img4,  target, prob, o_target
+            return img1, img2, img3, img4,  target, prob, o_target#, blur
 
         elif self.mode=='unlabeled':
             img = self.train_data[index]
@@ -208,9 +213,10 @@ class cifar_dataset(Dataset):
 
         elif self.mode=='all':
             img, target = self.train_data[index], self.noise_label[index]
+            # blur = self.blur_label[index]
             img = Image.fromarray(img)
             img = self.transform(img)            
-            return img, target
+            return img, target#, blur
 
         elif self.mode=='val':
             img, target = self.test_data[index], self.test_label[index]

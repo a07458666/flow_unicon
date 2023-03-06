@@ -130,6 +130,10 @@ class ResNet(nn.Module):
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
         self.linear = nn.Linear(512*block.expansion, num_classes)
         self.feature_head = nn.Linear(512*block.expansion, feature_dim)
+        # self.big_linear = nn.Sequential(
+        #     nn.Linear(512*block.expansion, 512*block.expansion),
+        #     nn.Linear(512*block.expansion, num_classes)
+        # )
         self.projection_head = nn.Linear(512*block.expansion, feature_dim)
         self.bnl = nn.BatchNorm1d(feature_dim)
 
