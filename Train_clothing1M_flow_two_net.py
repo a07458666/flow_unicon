@@ -51,11 +51,12 @@ parser.add_argument('--num_class', default=14, type=int)
 parser.add_argument('--num_batches', default=1000, type=int)
 parser.add_argument('--dataset', default="Clothing1M", type=str)
 parser.add_argument('--resume', default=False, type=bool, help = 'Resume from the warmup checkpoint')
+parser.add_argument('--pretrain_path', default="", type=str, help = 'Resume from the best checkpoint path')
 parser.add_argument('--warm_up', default=0, type=int)
 parser.add_argument('--name', default="", type=str)
 parser.add_argument('--flow_modules', default="128-128-128-128", type=str)
 parser.add_argument('--tol', default=1e-5, type=float, help='flow atol, rtol')
-parser.add_argument('--cond_size', default=512, type=int)
+parser.add_argument('--cond_size', default=2048, type=int)
 parser.add_argument('--lambda_f', default=1., type=float, help='flow nll loss weight')
 parser.add_argument('--pseudo_std', default=0.2, type=float)
 
@@ -352,6 +353,13 @@ def load_model(net1, flowNet1, net2, flowNet2):
     net2.module.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_2)))
     flowNet2.module.load_state_dict(torch.load(os.path.join(model_save_loc, model_name_flow_2)))
 
+def load_model_pretrain(net1, flowNet1, net2, flowNet2):
+    print("load_model pretrain_path")
+    net1.module.load_state_dict(torch.load(os.path.join(args.pretrain_path, model_name_1)))
+    flowNet1.module.load_state_dict(torch.load(os.path.join(args.pretrain_path, model_name_flow_1)))
+    net2.module.load_state_dict(torch.load(os.path.join(args.pretrain_path, model_name_2)))
+    flowNet2.module.load_state_dict(torch.load(os.path.join(args.pretrain_path, model_name_flow_2)))
+
 def save_model(idx, net, flowNet):
     if idx == 0:
         save_point = os.path.join(model_save_loc, model_name_1)
@@ -478,12 +486,24 @@ model_name_flow_2 = 'clothing1m_flow_2.pth.tar'
 
 if args.resume:
     load_model(net1, flowNet1, net2, flowNet2)
+    
 
 best_acc = [0,0]
 SR = 0
 torch.backends.cudnn.benchmark = True
 acc_meter = torchnet.meter.ClassErrorMeter(topk=[1,5], accuracy=True)
 nb_repeat = 2
+
+if args.pretrain_path != "":
+    val_loader = loader.run(0, 'val')
+    load_model_pretrain(net1, flowNet1, net2, flowNet2)
+    save_model(0, net1, flowNet1)
+    save_model(1, net2, flowNet2)
+    epoch = 0
+    acc_val_1, _ = eval(f"val_1",net1, flowNet1, val_loader)
+    best_acc[0] = acc_val_1
+    acc_val_2, _ = eval(f"val_2",net2, flowNet2, val_loader)
+    best_acc[1] = acc_val_2
 
 for epoch in range(0, args.num_epochs+1):
     startTime = time.time() 
