@@ -466,6 +466,11 @@ if __name__ == '__main__':
                 logMsg["ImageNet/confidence score"] = imagenet_confidence
             wandb.log(logMsg)
         
+        if args.save_last:
+            save_model(os.path.join(model_save_loc, "Net_last_1.pth"), net1, optimizer1, scheduler1, acc)
+            save_model(os.path.join(model_save_loc, "Net_last_2.pth"), net2, optimizer2, scheduler2, acc)
+            save_model(os.path.join(model_save_loc, "FlowNet_last_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1, acc)
+            save_model(os.path.join(model_save_loc, "FlowNet_last_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2, acc)
         if acc > best_acc:
             if epoch <args.warm_up:
                 save_model(os.path.join(model_save_loc, "Net_warmup_1.pth"), net1, optimizer1, scheduler1, acc)
