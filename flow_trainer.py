@@ -161,10 +161,10 @@ class FlowTrainer:
             # features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
             # loss_simCLR = self.contrastive_criterion(features)
             # =================
-            # f1, _ = net(inputs_s3)
-            # f2, _ = net(inputs_s4)
-            # features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
-            # loss_simCLR = self.contrastive_criterion(features)
+            f1, _ = net(inputs_s3)
+            f2, _ = net(inputs_s4)
+            features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+            loss_simCLR = self.contrastive_criterion(features)
             # == Unsupervised Contrastive Loss End ===
 
             if self.args.lossType == "mix":
@@ -173,7 +173,7 @@ class FlowTrainer:
                 L = loss_ce
             elif self.args.lossType == "nll":
                 L = (self.args.lambda_f * loss_nll)
-
+            L += loss_simCLR
             optimizer.zero_grad()
             optimizerFlow.zero_grad()
             L.backward()

@@ -353,6 +353,11 @@ if __name__ == '__main__':
         schedulerFlow1 = optim.lr_scheduler.ExponentialLR(optimizerFlow1, 0.98)
         scheduler2 = optim.lr_scheduler.ExponentialLR(optimizer2, 0.98)
         schedulerFlow2 = optim.lr_scheduler.ExponentialLR(optimizerFlow2, 0.98)
+    elif args.dataset=='WebVision':
+        scheduler1 = optim.lr_scheduler.ExponentialLR(optimizer1, 0.98)
+        schedulerFlow1 = optim.lr_scheduler.ExponentialLR(optimizerFlow1, 0.98)
+        scheduler2 = optim.lr_scheduler.ExponentialLR(optimizer2, 0.98)
+        schedulerFlow2 = optim.lr_scheduler.ExponentialLR(optimizerFlow2, 0.98)
     else:
         scheduler1 = optim.lr_scheduler.CosineAnnealingLR(optimizer1, args.num_epochs, args.lr / 1e2)
         schedulerFlow1 = optim.lr_scheduler.CosineAnnealingLR(optimizerFlow1, args.num_epochs, args.lr_f / 1e2)
@@ -401,19 +406,20 @@ if __name__ == '__main__':
         if args.dataset == 'WebVision':
             imagenet_valloader = loader.run(0.5, 'imagenet')
         
-        if args.dataset=='WebVision':
-            manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, args.lr, args.lr_f, mid_warmup)
+        # if args.dataset=='WebVision':
+        #     manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, args.lr, args.lr_f, mid_warmup)
         print("Data Size : ", len(warmup_trainloader.dataset))
         
         ## Warmup Stage 
-        if args.dataset=='WebVision':
-            ssl_trainloader = loader.run(0.0, 'ssl')
-            print('\nWarmup Model Net 1 (SSL & mixup)')
-            flowTrainer.warmup_ssl_mixup(epoch, net1, flowNet1, optimizer1, optimizerFlow1, ssl_trainloader)
-            print('\nWarmup Model Net 2 (SSL & mixup)')
-            flowTrainer.warmup_ssl_mixup(epoch, net2, flowNet2, optimizer2, optimizerFlow2, ssl_trainloader)
+        # if args.dataset=='WebVision':
+        #    ssl_trainloader = loader.run(0.0, 'ssl')
+        #    print('\nWarmup Model Net 1 (SSL & mixup)')
+        #    flowTrainer.warmup_ssl_mixup(epoch, net1, flowNet1, optimizer1, optimizerFlow1, ssl_trainloader)
+        #    print('\nWarmup Model Net 2 (SSL & mixup)')
+        #    flowTrainer.warmup_ssl_mixup(epoch, net2, flowNet2, optimizer2, optimizerFlow2, ssl_trainloader)
             
-        elif epoch<args.warm_up:       
+        #elif epoch<args.warm_up:
+        if epoch<args.warm_up:
             warmup_trainloader = loader.run(0, 'warmup')
 
             print('\nWarmup Model Net 1')
@@ -448,11 +454,10 @@ if __name__ == '__main__':
         # acc_n, confidence_n = flowTrainer.testByFlow(epoch, net1, flowNet1, net2, flowNet2, noise_valloader, test_num = 5000)
         # print('\n ==================')
         
-        if not (args.dataset=='WebVision'):
-            scheduler1.step()
-            schedulerFlow1.step()
-            scheduler2.step()
-            schedulerFlow2.step()
+        scheduler1.step()
+        schedulerFlow1.step()
+        scheduler2.step()
+        schedulerFlow2.step()
 
         ## wandb
         if (wandb != None):

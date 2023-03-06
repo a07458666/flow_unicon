@@ -276,7 +276,7 @@ class InceptionResNetV2(nn.Module):
         self.avgpool_1a = nn.AvgPool2d(8, count_include_pad=False)
         self.last_linear = nn.Linear(1536, num_classes)
 
-        # self.feature_head = nn.Linear(1536, feature_dim)
+        self.feature_head = nn.Linear(1536, feature_dim)
         self.projection_head = nn.Linear(1536, feature_dim)
         self.bnl = nn.BatchNorm1d(feature_dim)
 
@@ -310,6 +310,7 @@ class InceptionResNetV2(nn.Module):
         
         logits_out = self.logits(x)
         ssl_out = self.bnl(self.projection_head(x))
+        # feature_out = self.feature_head(x)
         # feature_out = F.avg_pool1d(x, 4)
         feature_out = x
         if get_feature:

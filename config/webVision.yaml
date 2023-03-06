@@ -14,7 +14,7 @@ flow_modules: 64-64-64-64
 weight_decay: 1e-4
 cond_size: 1536  #384 = 1536 / 4
 isRealTask: True
-centering: True
+centering: False
 center_momentum: 0.8
 decay: 0.99
 
@@ -25,4 +25,4 @@ Tf_warmup: 1.0
 Tf: 0.7
 flow_sp: False
 jumpRestart: True
-clip_grad: True
+clip_grad: False
