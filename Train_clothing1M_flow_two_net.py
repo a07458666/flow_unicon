@@ -378,10 +378,11 @@ def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, nb_repeat
 
     threshold   = torch.mean(prob)                                           ## Simply Take the average as the threshold
     SR = torch.sum(prob<threshold).item()/prob.size()[0]                    ## Calculate the Ratio of clean samples      
-
+    labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob,  paths=paths) # Uniform Selection
+    logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
+    
     for i in range(nb_repeat):
         print(f'Train Net {idx} repeat {i}\n')
-        labeled_trainloader, unlabeled_trainloader = loader.run(SR, 'train', prob= prob,  paths=paths) # Uniform Selection
         flowTrainer.train(epoch, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, labeled_trainloader, unlabeled_trainloader)    # train net1  
         acc_val, accs_val = eval(f"val_{idx + 1}",net1, flowNet1, val_loader)
         if acc_val > best_acc[idx]:
@@ -389,7 +390,6 @@ def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, nb_repeat
             best_acc[idx] = acc_val
             save_model(idx, net1, flowNet1)
 
-    logJSD_RealDataset(epoch, threshold, labeled_trainloader, unlabeled_trainloader)
 
 
 ## Semi-Supervised Loss

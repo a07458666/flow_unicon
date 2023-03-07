@@ -69,6 +69,7 @@ def argumentParse(input_args = None):
     parser.add_argument('--testSTD', default=False, type=bool, help = 'test acc std 0.2~1.0')
     parser.add_argument('--jumpRestart', default=False, type=bool, help = 'jumpRestart webvision')
     parser.add_argument('--save_last', default=False, type=bool, help = 'save last model')
+    parser.add_argument('--clr_loss', default=True, type=bool, help = 'use contrastive loss simCLR')
     
     # parser.add_argument('--blur', default=False, type=bool, help = 'blur label')
 

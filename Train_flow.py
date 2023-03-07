@@ -241,7 +241,7 @@ def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow):
 def manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, init_lr, init_flow_lr, mid_warmup = 25):
     lr = init_lr
     lr_flow = init_flow_lr
-    if epoch >= 60 or (epoch+1)%mid_warmup==0:
+    if (epoch+1)%mid_warmup==0:
         lr /= 10
         lr_flow /= 10
     for param_group in optimizer1.param_groups:

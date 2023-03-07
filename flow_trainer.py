@@ -290,11 +290,14 @@ class FlowTrainer:
                     x_sources_refine = js_distance(targets_x, labels_x_o, self.args.num_class)
 
             ## Unsupervised Contrastive Loss
-            f1, _ = net1(inputs_u3)
-            f2, _ = net1(inputs_u4)
+            if self.args.clr_loss:
+                f1, _ = net1(inputs_u3)
+                f2, _ = net1(inputs_u4)
 
-            features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
-            loss_simCLR = self.contrastive_criterion(features)
+                features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+                loss_simCLR = self.contrastive_criterion(features)
+            else:
+                loss_simCLR = torch.tensor(0).cuda()
 
             all_inputs  = torch.cat([inputs_x3, inputs_x4, inputs_u3, inputs_u4], dim=0)
             all_targets = torch.cat([targets_x, targets_x, targets_u, targets_u], dim=0)
