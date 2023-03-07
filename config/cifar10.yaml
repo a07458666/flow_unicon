@@ -16,3 +16,4 @@ center_momentum: 0.8
 T: 0.5
 flow_sp: False
 d_u: 0.5
+lambda_flow_u_warmup: 0.1
