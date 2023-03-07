@@ -302,7 +302,7 @@ def vis_distribution(net1, flowNet1, net2, flowNet2, loader):
         #     print(loader.dataset.train_data[idx].shape)
         #     print("classes : ", loader.dataset.noise_label[idx])
         with torch.no_grad():
-            for batch_idx, (inputs, labels, blur) in enumerate(sampler_loader):
+            for batch_idx, (inputs, labels) in enumerate(sampler_loader):
                 inputs = inputs.cuda()
                 labels = labels.cuda()
                 # print(labels[:10])
@@ -345,7 +345,7 @@ def vis_distribution(net1, flowNet1, net2, flowNet2, loader):
         
     drawLabelHist("all", classes_labels_vec)
     drawLabelHist("correct", classes_labels_correct_vec)
-    drawLabelHistOne("all", classes_labels_vec)
+    # drawLabelHistOne("all", classes_labels_vec)
     return
 
 
@@ -457,17 +457,21 @@ if __name__ == '__main__':
 
     epoch = 0
     ## Resume from the warmup checkpoint 
-    if args.resume:
-        _ = load_model(os.path.join(model_save_loc, "Net_warmup_1.pth"), net1, optimizer1, scheduler1)
-        _ = load_model(os.path.join(model_save_loc, "Net_warmup_2.pth"), net2, optimizer2, scheduler2)
-        _ = load_model(os.path.join(model_save_loc, "FlowNet_warmup_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1)
-        epoch = load_model(os.path.join(model_save_loc, "FlowNet_warmup_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2)
+    
+    # _ = load_model(os.path.join(model_save_loc, "Net_warmup_1.pth"), net1, optimizer1, scheduler1)
+    # _ = load_model(os.path.join(model_save_loc, "Net_warmup_2.pth"), net2, optimizer2, scheduler2)
+    # _ = load_model(os.path.join(model_save_loc, "FlowNet_warmup_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1)
+    # epoch = load_model(os.path.join(model_save_loc, "FlowNet_warmup_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2)
 
-    elif args.resume_best:
-        _ = load_model(os.path.join(model_save_loc, "Net_1.pth"), net1, optimizer1, scheduler1)
-        _ = load_model(os.path.join(model_save_loc, "Net_2.pth"), net2, optimizer2, scheduler2)
-        _ = load_model(os.path.join(model_save_loc, "FlowNet_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1)
-        epoch = load_model(os.path.join(model_save_loc, "FlowNet_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2)
+    # _ = load_model(os.path.join(model_save_loc, "Net_1.pth"), net1, optimizer1, scheduler1)
+    # _ = load_model(os.path.join(model_save_loc, "Net_2.pth"), net2, optimizer2, scheduler2)
+    # _ = load_model(os.path.join(model_save_loc, "FlowNet_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1)
+    # epoch = load_model(os.path.join(model_save_loc, "FlowNet_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2)
+
+    _ = load_model(os.path.join(model_save_loc, "Net_last_1.pth"), net1, optimizer1, scheduler1)
+    _ = load_model(os.path.join(model_save_loc, "Net_last_2.pth"), net2, optimizer2, scheduler2)
+    _ = load_model(os.path.join(model_save_loc, "FlowNet_last_1.pth"), flowNet1, optimizerFlow1, schedulerFlow1)
+    epoch = load_model(os.path.join(model_save_loc, "FlowNet_last_2.pth"), flowNet2, optimizerFlow2, schedulerFlow2)
     
     
     eval_loader = loader.run(0, 'eval_train')
