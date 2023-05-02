@@ -51,9 +51,9 @@ parser.add_argument('--dataset', default="Clothing1M", type=str)
 parser.add_argument('--resume', default=False, type=bool, help = 'Resume from the warmup checkpoint')
 parser.add_argument('--warm_up', default=0, type=int)
 parser.add_argument('--name', default="", type=str)
-parser.add_argument('--flow_modules', default="14-14-14-14", type=str)
-parser.add_argument('--ema_decay', default=0.99, type=float, help='ema decay')
-parser.add_argument('--cond_size', default=512, type=int)
+parser.add_argument('--flow_modules', default="128-128-128-128", type=str)
+parser.add_argument('--ema_decay', default=0.999, type=float, help='ema decay')
+parser.add_argument('--cond_size', default=2048, type=int)
 parser.add_argument('--lambda_f', default=1., type=float, help='flow nll loss weight')
 # parser.add_argument('--lambda_u', default=30, type=float, help='weight for unsupervised loss')
 
@@ -140,14 +140,14 @@ def train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, u
         logits_u = logits[batch_size*2:]        
         
         # ## Semi-supervised Loss
-        Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
+        # Lx, Lu, lamb = criterion(logits_x, mixed_target[:batch_size*2], logits_u, mixed_target[batch_size*2:], epoch+batch_idx/num_iter, warm_up)
 
         # Lx = -torch.mean(
         #     torch.sum(F.log_softmax(logits, dim=1) * mixed_target, dim=1)
         # )
 
         # Regularization feature var
-        reg_f_var_loss = torch.clamp(1-torch.sqrt(flow_feature.var(dim=0) + 1e-10), min=0).mean()
+        # reg_f_var_loss = torch.clamp(1-torch.sqrt(flow_feature.var(dim=0) + 1e-10), min=0).mean()
             
         ## Flow
         flow_mixed_target = mixed_target.unsqueeze(1).cuda()
@@ -167,13 +167,14 @@ def train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, u
 
         # loss = Lx  + args.lambda_c*loss_simCLR + penalty
         # loss = Lx + args.lambda_c*loss_simCLR + penalty + reg_f_var_loss + loss_flow
-        loss = Lx + ((lamb + 1) * Lu) + args.lambda_c*loss_simCLR + penalty + reg_f_var_loss + loss_flow
+        # loss = Lx + ((lamb + 1) * Lu) + args.lambda_c*loss_simCLR + penalty + reg_f_var_loss + loss_flow
+        loss = args.lambda_c*loss_simCLR +loss_flow
 
         ## Compute gradient and do SGD step
         optimizer.zero_grad()
         optimizer_flow.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(flowNet.parameters(), 1e-10)
+        # torch.nn.utils.clip_grad_norm_(flowNet.parameters(), 1e-10)
         optimizer.step()
         optimizer_flow.step()
         # EMA step
@@ -181,18 +182,18 @@ def train(epoch, net, flowNet, optimizer, optimizer_flow, labeled_trainloader, u
         flowNet_ema.update()
 
         sys.stdout.write('\r')
-        sys.stdout.write('%s: | Epoch [%3d/%3d] Iter[%3d/%3d]\t Labeled loss: %.2f  Contrative Loss:%.4f nll Loss:%.4f'
-                %(args.dataset,  epoch, args.num_epochs, batch_idx+1, num_iter, Lx, loss_simCLR, loss_flow))
+        sys.stdout.write('%s: | Epoch [%3d/%3d] Iter[%3d/%3d]\t  Contrative Loss:%.4f nll Loss:%.4f'
+                %(args.dataset,  epoch, args.num_epochs, batch_idx+1, num_iter, loss_simCLR, loss_flow))
         sys.stdout.flush()
 
         ## wandb
         if (wandb != None):
             logMsg = {}
             logMsg["epoch"] = epoch
-            logMsg["loss/Lx"] = Lx.item()
+            # logMsg["loss/Lx"] = Lx.item()
             logMsg["loss/loss_simCLR"] = loss_simCLR.item()
-            logMsg["loss/penalty"] = penalty.item()
-            logMsg["loss/reg_f_var_loss"] = reg_f_var_loss.item()
+            # logMsg["loss/penalty"] = penalty.item()
+            # logMsg["loss/reg_f_var_loss"] = reg_f_var_loss.item()
             logMsg["loss/loss_flow"] = loss_flow.item()
 
 
@@ -203,7 +204,7 @@ def warmup(net, flowNet, optimizer, optimizer_flow,dataloader):
         optimizer.zero_grad()
         optimizer_flow.zero_grad()
         _ , outputs, feature_flow = net(inputs, get_feature = True)              
-        loss = CEloss(outputs, labels)  
+        # loss = CEloss(outputs, labels)  
         
         penalty = conf_penalty(outputs)
 
@@ -218,23 +219,24 @@ def warmup(net, flowNet, optimizer, optimizer_flow,dataloader):
         log_p2 = (approx2 - delta_log_p2)
         loss_nll = -log_p2.mean()
 
-        L = loss + penalty + loss_nll    
+        # L = loss + penalty + loss_nll    
+        L = loss_nll
         L.backward()  
         optimizer.step()
         optimizer_flow.step()
 
         sys.stdout.write('\r')
-        sys.stdout.write('|Warm-up: Iter[%3d/%3d]\t CE-loss: %.4f  Conf-Penalty: %.4f nll loss: %.4f'
-                %(batch_idx+1, args.num_batches, loss.item(), penalty.item(), loss_nll.item()))
+        # sys.stdout.write('|Warm-up: Iter[%3d/%3d]\t CE-loss: %.4f  Conf-Penalty: %.4f nll loss: %.4f'
+        #         %(batch_idx+1, args.num_batches, loss.item(), penalty.item(), loss_nll.item()))
         sys.stdout.flush()
 
         ## wandb
         if (wandb != None):
             logMsg = {}
             logMsg["epoch"] = epoch
-            logMsg["loss/CEloss"] = loss.item()
+            # logMsg["loss/CEloss"] = loss.item()
             logMsg["loss/nll"] = loss_nll.item()
-            logMsg["loss/penalty"] = penalty.item()
+            # logMsg["loss/penalty"] = penalty.item()
     
 def val(net, flowNet,val_loader):
     net.eval()
