@@ -621,14 +621,6 @@ class FlowTrainer:
         
         print("\n| Test Epoch #%d\t Accuracy: %.2f%%\t Condifence: %.2f%%\n" %(epoch, acc, confidence))
         
-        ## wandb
-        if (wandb != None):
-            logMsg = {}
-            logMsg["epoch"] = epoch
-            logMsg["accHead/test_flow"] = acc_flow
-            logMsg["accHead/test_resnet"] = acc_ce
-            logMsg["accHead/test_mix"] = acc_mix
-            wandb.log(logMsg)
 
         return acc, confidence
 

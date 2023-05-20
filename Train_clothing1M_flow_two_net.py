@@ -36,7 +36,7 @@ except ImportError:
 
 parser = argparse.ArgumentParser(description='PyTorch Clothing1M Training')
 parser.add_argument('--batch_size', default=32, type=int, help='train batchsize') 
-parser.add_argument('--lr', '--learning_rate', default=0.02, type=float, help='initial learning rate')   ## Set the learning rate to 0.005 for faster training at the beginning
+parser.add_argument('--lr', '--learning_rate', default=2e-3, type=float, help='initial learning rate')   ## Set the learning rate to 0.005 for faster training at the beginning
 parser.add_argument('--lr_f', default=2e-5, type=float, help='initial flow learning rate')
 parser.add_argument('--alpha', default=0.5, type=float, help='parameter for Beta')
 parser.add_argument('--lambda_c', default=0.025, type=float, help='weight for contrastive loss')
@@ -72,7 +72,7 @@ parser.add_argument('--Tf', default=0.7, type=float, help='flow sharpening tempe
 parser.add_argument('--sharpening', default="UNICON", type=str, choices=['DINO', 'UNICON'], help = 'sharpening method')
 
 # Flow Centering
-parser.add_argument('--centering', default=False, type=bool, help='use centering')
+parser.add_argument('--centering', default=True, type=bool, help='use centering')
 parser.add_argument('--center_momentum', default=0.90, type=float, help='use centering')
 
 # Flow w_u
@@ -82,6 +82,10 @@ parser.add_argument('--lambda_flow_u_warmup', default=0.1, type=float, help='wei
 
 parser.add_argument('--lambda_u', default=30, type=float, help='weight for unsupervised loss')
 parser.add_argument('--isRealTask', default=True, type=bool, help='')
+parser.add_argument('--clr_loss', default=True, type=bool, help = 'use contrastive loss simCLR')
+
+parser.add_argument('--jumpRestart', default=False, type=bool, help = 'jumpRestart')
+parser.add_argument('--mid_warmup', default=10, type=float, help='jump restart epoch')
 
 args = parser.parse_args()
 
@@ -390,7 +394,20 @@ def run(idx, net1, flowNet1, net2, flowNet2, optimizer, optimizerFlow, nb_repeat
             best_acc[idx] = acc_val
             save_model(idx, net1, flowNet1)
 
-
+def manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, init_lr, init_flow_lr, mid_warmup = 25):
+    lr = init_lr
+    lr_flow = init_flow_lr
+    if (epoch+1) % mid_warmup==0:
+        lr /= 10
+        lr_flow /= 10
+    for param_group in optimizer1.param_groups:
+        param_group['lr'] = lr       
+    for param_group in optimizer2.param_groups:
+        param_group['lr'] = lr 
+    for param_group in optimizerFlow1.param_groups:
+        param_group['lr'] = lr_flow       
+    for param_group in optimizerFlow2.param_groups:
+        param_group['lr'] = lr_flow  
 
 ## Semi-Supervised Loss
 class SemiLoss(object):
@@ -524,7 +541,17 @@ for epoch in range(0, args.num_epochs+1):
         warmup_standard(epoch, net2, flowNet2, optimizer2, optimizerFlow2,warmup_trainloader)
         # acc_val2, accs_val2 = eval("val_2", net2, flowNet2, val_loader)
         save_model(1, net2, flowNet2)
+    elif args.jumpRestart and ((epoch+1) % args.mid_warmup) == 0:
+        manually_learning_rate(epoch, optimizer1, optimizerFlow1, optimizer2, optimizerFlow2, args.lr, args.lr_f, mid_warmup = args.mid_warmup)
+        print('\nWarmup Net 1')
+        warmup_standard(epoch, net1, flowNet1, optimizer1, optimizerFlow1,warmup_trainloader)
+        # acc_val1, accs_val1 = eval("val_1", net1, flowNet1, val_loader)
+        save_model(0, net1, flowNet1)
         
+        print('\nWarmup Net 2')
+        warmup_standard(epoch, net2, flowNet2, optimizer2, optimizerFlow2,warmup_trainloader)
+        # acc_val2, accs_val2 = eval("val_2", net2, flowNet2, val_loader)
+        save_model(1, net2, flowNet2)
     else:
         run(0, net1, flowNet1, net2, flowNet2, optimizer1, optimizerFlow1, nb_repeat)
         run(1, net2, flowNet2, net1, flowNet1, optimizer2, optimizerFlow2, nb_repeat)
